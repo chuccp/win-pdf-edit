@@ -701,6 +701,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             else
                 points = EditFontSize;
 
+            // WPF lays a line out in roughly 1.22 x FontSize, while the PDF's box measures the
+            // glyphs themselves (~0.85 em). Using the PDF size verbatim therefore makes the text
+            // taller than the box it sits in and it spills out. Cap the size so one line fits.
+            if (SelectedBounds is { } bounds && bounds.Bottom > bounds.Top)
+                points = Math.Min(points, (bounds.Bottom - bounds.Top) * 0.82);
+
             return Math.Clamp(points * zoom, 6, 200);
         }
     }

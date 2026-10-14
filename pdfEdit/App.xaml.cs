@@ -203,6 +203,9 @@ public partial class App : Application
                 vm.CurrentTool = ViewModels.EditorTool.EditContent;
                 vm.SelectObjectAt(vm.Pages[0], new System.Windows.Point(297, 264));
                 CaptureWindow(window, Path.Combine(AppContext.BaseDirectory, "shot_settled.png"));
+                log.AppendLine($"SelectionFontSize 绑定值 = {vm.SelectionFontSize:0.#} " +
+                               $"(对象 {vm.SelectedObject?.FontSize ?? 0:0.#}pt, zoom {vm.Zoom:0.##})");
+                log.AppendLine($"SelectionHeight = {vm.Pages[0].SelectionHeight:0.#}");
 
                 log.AppendLine(first?.Image is null ? "UI 冒烟测试失败: 首页未渲染" : "UI 冒烟测试通过");
 
