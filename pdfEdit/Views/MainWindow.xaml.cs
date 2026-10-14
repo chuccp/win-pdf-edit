@@ -93,6 +93,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_viewModel.CurrentTool == EditorTool.InsertText)
+        {
+            _viewModel.InsertTextAt(page, ToPageSpace(position));
+            HighlightSelection(page);
+            return;
+        }
+
         if (_viewModel.CurrentTool == EditorTool.EditContent)
         {
             // Content editing works on a single click, not a drag.

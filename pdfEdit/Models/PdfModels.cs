@@ -85,8 +85,11 @@ public sealed class TextReplacement
 {
     public required PageItem Page { get; init; }
 
-    /// <summary>Area the original text occupied, in display space at the time of editing.</summary>
-    public required TextRect Bounds { get; init; }
+    /// <summary>
+    /// Area the text occupies, in display space at the time of editing. Settable because a
+    /// revision may need a wider box than the string it replaces.
+    /// </summary>
+    public required TextRect Bounds { get; set; }
 
     public required string Text { get; set; }
     public double FontSize { get; set; } = 12;

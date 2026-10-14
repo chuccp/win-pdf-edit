@@ -24,6 +24,9 @@ public enum EditorTool
     /// This is the tool that modifies the PDF's own text and objects.
     /// </summary>
     EditContent,
+
+    /// <summary>Places brand-new text on the page at the click point.</summary>
+    InsertText,
 }
 
 public sealed class MainViewModel : ObservableObject, IDisposable
@@ -106,7 +109,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             StatusText = value switch
             {
                 EditorTool.Select => "选择模式：点击查看批注，右键删除。",
-                EditorTool.EditContent => "正文编辑：带框的文字点一下即可原地修改。",
+                EditorTool.EditContent => "正文编辑：带框的文字点一下即可原地修改，双击任意文字也行。",
+                EditorTool.InsertText => "插入文字：在页面上点击要放置的位置。",
                 _ => $"绘图模式：在页面上拖拽以添加{DescribeTool(value)}。",
             };
         }
@@ -258,8 +262,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RedoCommand = new RelayCommand(Redo, () => _redoStack.Count > 0);
         RunOcrCommand = new RelayCommand(() => _ = RunOcrAsync(singlePage: true), () => HasDocument);
         RunOcrAllCommand = new RelayCommand(() => _ = RunOcrAsync(singlePage: false), () => HasDocument);
-        ApplyContentEditCommand = new RelayCommand(ApplyContentEdit, () => SelectedObject is not null);
-        DeleteContentObjectCommand = new RelayCommand(DeleteContentObject, () => SelectedObject is not null);
+        // Gated on CanEditSelection, not on SelectedObject: recognised words and inserted
+        // replacements are editable too, and keying off the object alone silently disabled
+        // the command for both.
+        ApplyContentEditCommand = new RelayCommand(ApplyContentEdit, () => CanEditSelection);
+        DeleteContentObjectCommand = new RelayCommand(DeleteContentObject,
+            () => SelectedObject is not null || _selectedOcrWord is not null);
         CancelContentEditCommand = new RelayCommand(ClearObjectSelection);
     }
 
@@ -556,32 +564,132 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         private set
         {
             if (!SetField(ref _selectedObject, value)) return;
+
+            // Everything derived from the selection has to be announced here rather than at each
+            // call site. When these were only raised on some paths, the inline editor stayed
+            // disabled for ordinary page text and typing into it did nothing.
             OnPropertyChanged(nameof(HasSelection));
+            OnPropertyChanged(nameof(SelectionLabel));
+            OnPropertyChanged(nameof(CanEditSelection));
+            OnPropertyChanged(nameof(SelectedBounds));
+            OnPropertyChanged(nameof(IsOcrSelection));
+            OnPropertyChanged(nameof(IsReplacementSelection));
+
             ApplyContentEditCommand.RaiseCanExecuteChanged();
             DeleteContentObjectCommand.RaiseCanExecuteChanged();
         }
     }
 
     /// <summary>Explicit inverse for XAML binding; converters cannot be chained.</summary>
-    public bool HasSelection => SelectedObject is not null || _selectedOcrWord is not null;
+    public bool HasSelection =>
+        SelectedObject is not null || _selectedOcrWord is not null || _editingReplacement is not null;
 
     /// <summary>True when the current selection is a word read off a scan rather than real PDF text.</summary>
     public bool IsOcrSelection => _selectedOcrWord is not null;
 
+    /// <summary>A replacement being composed or revised, e.g. freshly inserted text.</summary>
+    private TextReplacement? _editingReplacement;
+    public bool IsReplacementSelection => _editingReplacement is not null;
+
+    /// <summary>Font size applied to the edit. Changing it reflows a replacement immediately.</summary>
+    public double EditFontSize
+    {
+        get => _editFontSize;
+        set
+        {
+            if (!SetField(ref _editFontSize, Math.Clamp(value, 4, 200))) return;
+            ApplyFormattingToSelection();
+        }
+    }
+    private double _editFontSize = 12;
+
+    /// <summary>Hex colour applied to the edit, e.g. "#C81E1E".</summary>
+    public string EditColour
+    {
+        get => _editColour;
+        set
+        {
+            if (!SetField(ref _editColour, value)) return;
+            OnPropertyChanged(nameof(EditColourBrush));
+            ApplyFormattingToSelection();
+        }
+    }
+    private string _editColour = "#141414";
+
+    /// <summary>Swatch shown next to the colour box.</summary>
+    public System.Windows.Media.Brush EditColourBrush
+    {
+        get
+        {
+            try
+            {
+                return new System.Windows.Media.SolidColorBrush(
+                    (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                        .ConvertFromString(EditColour));
+            }
+            catch
+            {
+                return System.Windows.Media.Brushes.Black;
+            }
+        }
+    }
+
+    /// <summary>Pushes the current size and colour onto whatever is being edited.</summary>
+    private void ApplyFormattingToSelection()
+    {
+        if (_editingReplacement is null) return;
+
+        _editingReplacement.FontSize = EditFontSize;
+        ParseColour(EditColour, out var r, out var g, out var b);
+        _editingReplacement.R = r;
+        _editingReplacement.G = g;
+        _editingReplacement.B = b;
+
+        RefreshPageOf(_editingReplacement);
+    }
+
+    private static void ParseColour(string hex, out byte r, out byte g, out byte b)
+    {
+        r = g = b = 20;
+        try
+        {
+            var colour = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                .ConvertFromString(hex);
+            r = colour.R; g = colour.G; b = colour.B;
+        }
+        catch
+        {
+            // Keep the default rather than failing the edit over a malformed colour.
+        }
+    }
+
+    /// <summary>Number of pages the document holds, for status text and bounds checks.</summary>
+    private void RefreshPageOf(TextReplacement replacement)
+    {
+        var owner = Pages.FirstOrDefault(p => p.Item == replacement.Page);
+        if (owner is not null) RefreshAfterContentEdit(owner, "已更新格式。");
+    }
+
     /// <summary>Area of whatever is selected, in display space, for drawing the highlight box.</summary>
-    public TextRect? SelectedBounds => _selectedOcrWord?.Bounds ?? SelectedObject?.Bounds;
+    public TextRect? SelectedBounds =>
+        _editingReplacement?.Bounds ?? _selectedOcrWord?.Bounds ?? SelectedObject?.Bounds;
 
     /// <summary>
     /// Whether the selected thing can be retyped. Recognised words always can; a page object
     /// only when it is actually text.
     /// </summary>
-    public bool CanEditSelection => _selectedOcrWord is not null || SelectedObject?.IsText == true;
+    public bool CanEditSelection =>
+        _editingReplacement is not null ||
+        _selectedOcrWord is not null ||
+        SelectedObject?.IsText == true;
 
-    public string SelectionLabel => _selectedOcrWord is { } w
-        ? $"识别文字「{w.Text}」"
-        : SelectedObject is { } o
-            ? $"{o.TypeLabel}对象 {o.FontName} {o.FontSize:0.#}pt"
-            : string.Empty;
+    public string SelectionLabel => _editingReplacement is { } repl
+        ? (repl.HideObjectPath is null ? "新插入的文字" : "替换文字")
+        : _selectedOcrWord is { } w
+            ? $"识别文字「{w.Text}」"
+            : SelectedObject is { } o
+                ? $"{o.TypeLabel}对象 {o.FontName} {o.FontSize:0.#}pt"
+                : string.Empty;
 
     private OcrWord? _selectedOcrWord;
     private PageViewModel? _selectedObjectPage;
@@ -680,10 +788,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         SelectedObject = null;
         _selectedOcrWord = null;
+        _editingReplacement = null;
         _selectedObjectPage = null;
         ContentEditText = string.Empty;
         ContentEditHint = string.Empty;
         OnPropertyChanged(nameof(IsOcrSelection));
+        OnPropertyChanged(nameof(IsReplacementSelection));
         OnPropertyChanged(nameof(SelectionLabel));
         OnPropertyChanged(nameof(HasSelection));
     }
@@ -737,6 +847,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void ApplyContentEdit()
     {
         if (_engine is null || _selectedObjectPage is not { } page) return;
+
+        // Revising a replacement (an inserted string, or one already swapped for a substitute).
+        if (_editingReplacement is { } editing)
+        {
+            editing.Text = ContentEditText;
+            editing.FontSize = EditFontSize;
+            ParseColour(EditColour, out var er, out var eg, out var eb);
+            editing.R = er; editing.G = eg; editing.B = eb;
+
+            // Widen the box so longer text is not squeezed by the shrink-to-fit at export.
+            var width = Math.Max(editing.Bounds.Right - editing.Bounds.Left,
+                                 ContentEditText.Length * EditFontSize * 0.95);
+            editing.Bounds = new TextRect(editing.Bounds.Left, editing.Bounds.Top,
+                editing.Bounds.Left + width, editing.Bounds.Top + EditFontSize * 1.4);
+
+            ClearObjectSelection();
+            RefreshAfterContentEdit(page, "已更新文字。");
+            return;
+        }
 
         // Recognised text on a scan: there is nothing to rewrite, only pixels. Paint over the
         // original area with the surrounding colour and draw the new text in its place.
@@ -1269,6 +1398,46 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // ------------------------------------------------------------------ annotations
 
     /// <summary>
+    /// Places a new text box on the page. The text is held as a replacement and drawn at export,
+    /// the same path an edited string takes, so inserting and editing behave identically.
+    /// </summary>
+    public void InsertTextAt(PageViewModel page, Point pagePoint)
+    {
+        var replacement = new TextReplacement
+        {
+            Page = page.Item,
+            Bounds = new TextRect(pagePoint.X, pagePoint.Y,
+                                 pagePoint.X + EditFontSize * 6, pagePoint.Y + EditFontSize * 1.4),
+            Text = "新文字",
+            FontSize = EditFontSize,
+            FontFamily = PdfExportService.TextLayerFont,
+        };
+        ParseColour(EditColour, out var r, out var g, out var b);
+        replacement.R = r; replacement.G = g; replacement.B = b;
+
+        _model.TextReplacements.Add(replacement);
+        _contentEdited = true;
+
+        PushEdit("插入文字",
+            undo: () => _model.TextReplacements.Remove(replacement),
+            redo: () => _model.TextReplacements.Add(replacement));
+
+        _editingReplacement = replacement;
+        _selectedObjectPage = page;
+        ContentEditText = replacement.Text;
+        ContentEditHint = string.Empty;
+
+        OnPropertyChanged(nameof(IsReplacementSelection));
+        OnPropertyChanged(nameof(SelectionLabel));
+        OnPropertyChanged(nameof(HasSelection));
+        ApplyContentEditCommand.RaiseCanExecuteChanged();
+        DeleteContentObjectCommand.RaiseCanExecuteChanged();
+
+        RefreshAfterContentEdit(page, "已插入文字。");
+        StatusText = "已插入文字，直接输入内容即可。";
+    }
+
+    /// <summary>
     /// Adds an annotation from a drag on a page. <paramref name="path"/> is the pointer trail in
     /// page points — a single point for a click, many for ink. Text-markup tools snap the run
     /// between the first and last point onto the underlying text.
@@ -1276,7 +1445,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public AnnotationSpec? AddAnnotation(PageViewModel page, EditorTool tool, IReadOnlyList<Point> path)
     {
         // Select and EditContent are pointer modes, not annotation tools.
-        if (_engine is null || tool is EditorTool.Select or EditorTool.EditContent || path.Count == 0)
+        if (_engine is null ||
+            tool is EditorTool.Select or EditorTool.EditContent or EditorTool.InsertText ||
+            path.Count == 0)
             return null;
 
         var dragStart = path[0];
@@ -1680,6 +1851,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         EditorTool.Ink => "自由绘制",
         EditorTool.Note => "便签",
         EditorTool.EditContent => "正文编辑",
+        EditorTool.InsertText => "插入文字",
         _ => "批注",
     };
 

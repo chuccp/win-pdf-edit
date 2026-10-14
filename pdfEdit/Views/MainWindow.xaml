@@ -263,10 +263,19 @@
                          instead of overlaying something on top of it. -->
                     <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
                                  IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=EditContent}"
-                                 ToolTip="编辑正文：点击页面上的文字直接修改">
+                                 ToolTip="编辑正文：点击带框的文字原地修改，双击任意文字也可">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8AC;" FontFamily="Segoe MDL2 Assets" Foreground="#1D4ED8"/>
                             <TextBlock Text="正文" Margin="4,0,0,0" Foreground="#1D4ED8"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                    <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                                 IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=InsertText}"
+                                 ToolTip="插入文字：在页面任意位置点击后输入">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets" Foreground="#1D4ED8"/>
+                            <TextBlock Text="插入" Margin="4,0,0,0" Foreground="#1D4ED8"/>
                         </StackPanel>
                     </RadioButton>
 

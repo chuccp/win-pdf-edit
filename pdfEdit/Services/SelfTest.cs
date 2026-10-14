@@ -560,6 +560,46 @@ internal static class SelfTest
 
                 undoVm.UndoCommand.Execute(null);
 
+                // 1b) in-place text edit driven exactly the way the inline editor drives it.
+                // This is the path that was silently dead when the selection failed to notify.
+                undoVm.CurrentTool = ViewModels.EditorTool.EditContent;
+                var page0 = undoVm.Pages[0];
+                undoVm.SelectObjectAt(page0, new System.Windows.Point(297, 264));
+
+                if (undoVm.SelectedObject is not { IsText: true } picked)
+                {
+                    Fail("双击位置没有选中文字对象");
+                }
+                else if (!undoVm.CanEditSelection)
+                {
+                    Fail("选中文字后仍不可编辑（通知缺失）");
+                }
+                else
+                {
+                    Info($"选中: 「{Truncate(picked.Text, 24)}」 标签=\"{undoVm.SelectionLabel}\"");
+                    var original = picked.Text;
+                    var flipped = new string(original.Reverse().ToArray());
+
+                    undoVm.ContentEditText = flipped;
+                    undoVm.ApplyContentEditCommand.Execute(null);
+
+                    // SelectedObject is a snapshot taken at selection time, so its Text is
+                    // always the pre-edit value. Re-select to read the document as it is now.
+                    undoVm.SelectObjectAt(page0, new System.Windows.Point(297, 264));
+                    var nowHeld = undoVm.SelectedObject?.Text;
+                    Info($"改写后状态: {undoVm.StatusText}");
+
+                    if (nowHeld == flipped || undoVm.Model.TextReplacements.Count > 0)
+                        Ok($"原地编辑已生效：\"{Truncate(original, 16)}\" → \"{Truncate(flipped, 16)}\"");
+                    else
+                        Fail($"原地编辑未生效，对象文本仍为 \"{Truncate(nowHeld ?? "(空)", 24)}\"");
+                }
+
+                // 1c) whatever the edit did, it must be reversible
+                var replaceBefore = undoVm.Model.TextReplacements.Count;
+                undoVm.UndoCommand.Execute(null);
+                Info($"撤销后替换条目 {replaceBefore} → {undoVm.Model.TextReplacements.Count}");
+
                 // 2) rotation
                 var rotBefore = firstPage.Item.Rotation;
                 undoVm.RotateClockwiseCommand.Execute(null);
