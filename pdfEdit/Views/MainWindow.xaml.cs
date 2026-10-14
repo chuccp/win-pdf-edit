@@ -178,17 +178,103 @@ public partial class MainWindow : Window
         _dragCanvas = null;
     }
 
-    /// <summary>Right-click deletes whichever annotation is under the pointer, in any mode.</summary>
+    /// <summary>
+    /// Right-click opens a context menu describing what is actually under the pointer.
+    ///
+    /// The entries are built per click rather than declared in XAML because what is available
+    /// depends on the page: a scanned page offers recognised text, a text page offers objects,
+    /// and either may or may not have an annotation at that spot. Offering greyed-out entries
+    /// for things that cannot apply would be noise.
+    /// </summary>
     private void OnPageRightClick(object sender, MouseButtonEventArgs e)
     {
         if (PageOf(sender) is not { } page) return;
-
-        // Right-click is destructive, so it is an editing gesture like any other.
         if (!_viewModel.IsEditMode) return;
 
-        DeleteAnnotationAt(page, e.GetPosition((IInputElement)sender));
+        var devicePoint = e.GetPosition((IInputElement)sender);
+        var pagePoint = ToPageSpace(devicePoint);
+
+        var menu = new ContextMenu { PlacementTarget = (UIElement)sender };
+
+        // --- text: edit / copy / delete ---
+        var textTarget = _viewModel.FindTextAt(page, pagePoint);
+
+        if (textTarget is not null)
+        {
+            var edit = new MenuItem { Header = "编辑文字" };
+            edit.Click += (_, _) =>
+            {
+                _viewModel.CurrentTool = EditorTool.EditContent;
+                _viewModel.SelectObjectAt(page, pagePoint);
+            };
+            menu.Items.Add(edit);
+
+            var copy = new MenuItem { Header = "复制文字" };
+            copy.Click += (_, _) =>
+            {
+                try
+                {
+                    Clipboard.SetText(textTarget.Text);
+                    _viewModel.StatusText = $"已复制「{Trim(textTarget.Text)}」";
+                }
+                catch
+                {
+                    // The clipboard can be locked by another process; not worth a dialog.
+                    _viewModel.StatusText = "复制失败，剪贴板被占用。";
+                }
+            };
+            menu.Items.Add(copy);
+
+            var remove = new MenuItem { Header = "删除这段文字" };
+            remove.Click += (_, _) =>
+            {
+                _viewModel.SelectObjectAt(page, pagePoint);
+                _viewModel.DeleteContentObjectCommand.Execute(null);
+            };
+            menu.Items.Add(remove);
+
+            menu.Items.Add(new Separator());
+        }
+
+        // --- annotation under the pointer ---
+        var annotation = FindAnnotationAt(page, devicePoint);
+        if (annotation?.Source is not null)
+        {
+            var delete = new MenuItem { Header = $"删除{Describe(annotation.Source.Kind)}批注" };
+            delete.Click += (_, _) =>
+                _viewModel.DeleteAnnotationCommand.Execute(annotation.Source);
+            menu.Items.Add(delete);
+        }
+
+        // --- page level ---
+        if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+
+        var rotate = new MenuItem { Header = "顺时针旋转本页" };
+        rotate.Click += (_, _) =>
+        {
+            _viewModel.CurrentPageIndex = _viewModel.Pages.IndexOf(page);
+            _viewModel.RotateClockwiseCommand.Execute(null);
+        };
+        menu.Items.Add(rotate);
+
+        if (textTarget is null && annotation?.Source is null)
+        {
+            var insert = new MenuItem { Header = "在此插入文字" };
+            insert.Click += (_, _) =>
+            {
+                _viewModel.CurrentTool = EditorTool.InsertText;
+                _viewModel.InsertTextAt(page, pagePoint);
+            };
+            menu.Items.Add(insert);
+        }
+
+        menu.IsOpen = true;
         e.Handled = true;
     }
+
+    private static string Trim(string s) => s.Length <= 20 ? s : s[..20] + "…";
+
+
 
     private void DeleteAnnotationAt(PageViewModel page, Point devicePoint)
     {

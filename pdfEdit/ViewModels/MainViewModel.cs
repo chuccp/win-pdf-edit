@@ -760,6 +760,39 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// preferred and, of those, the smallest — a click inside a big text block should pick the
     /// line under the cursor rather than the whole block.
     /// </summary>
+    /// <summary>
+    /// The text object under a point, or null. Read-only: used to decide whether a context-menu
+    /// entry applies, so it must not disturb the current selection.
+    /// </summary>
+    public PageObjectInfo? FindTextAt(PageViewModel page, Point pagePoint)
+    {
+        if (_engine is null) return null;
+
+        // Recognised words are the editable text on a scanned page.
+        if (_model.TextLayers.TryGetValue(page.Item, out var words))
+        {
+            var word = words.FirstOrDefault(w =>
+                pagePoint.X >= w.Bounds.Left && pagePoint.X <= w.Bounds.Right &&
+                pagePoint.Y >= w.Bounds.Top && pagePoint.Y <= w.Bounds.Bottom);
+
+            if (word is not null)
+                return new PageObjectInfo([], 0, 1, word.Bounds, word.Text, string.Empty, 0);
+        }
+
+        try
+        {
+            return _engine.GetPageObjects(page.SourceIndex)
+                .Where(o => o.IsText && !string.IsNullOrWhiteSpace(o.Text) &&
+                            o.Contains(pagePoint.X, pagePoint.Y))
+                .OrderBy(o => o.Bounds.Width * o.Bounds.Height)
+                .FirstOrDefault();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public void SelectObjectAt(PageViewModel page, Point pagePoint)
     {
         if (_engine is null) return;
