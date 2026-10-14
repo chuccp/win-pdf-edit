@@ -19,6 +19,7 @@ public partial class App : Application
         // A WinExe has no console attached, so results go to a log file.
         if (e.Args.Length >= 3 && e.Args[0] == "--selftest")
         {
+            _headless = true;
             var code = SelfTest.Run(e.Args[1], e.Args[2]);
             Shutdown(code);
             return;
@@ -43,14 +44,29 @@ public partial class App : Application
 
         DispatcherUnhandledException += (_, args) =>
         {
+            args.Handled = true;
+
+            // Headless runs must never raise a dialog: nothing can dismiss it, so the process
+            // would hang until killed and the failure would look like a timeout.
+            if (_headless)
+            {
+                File.AppendAllText(
+                    Path.Combine(AppContext.BaseDirectory, "uitest.log"),
+                    "\n!! 未处理的异常: " + args.Exception + "\n");
+                return;
+            }
+
             MessageBox.Show(args.Exception.Message, "PDF 编辑器 — 未处理的错误",
                 MessageBoxButton.OK, MessageBoxImage.Error);
-            args.Handled = true;
         };
     }
 
+    /// <summary>Set while running --selftest / --uitest, where a modal dialog would deadlock.</summary>
+    private static bool _headless;
+
     private void RunUiSmokeTest(string? pdfPath)
     {
+        _headless = true;
         var log = new System.Text.StringBuilder();
         var logPath = Path.Combine(AppContext.BaseDirectory, "uitest.log");
         void Flush() => File.WriteAllText(logPath, log.ToString());
