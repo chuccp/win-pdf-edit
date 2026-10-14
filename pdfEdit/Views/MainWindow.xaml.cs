@@ -88,7 +88,6 @@ public partial class MainWindow : Window
         {
             _viewModel.CurrentTool = EditorTool.EditContent;
             _viewModel.SelectObjectAt(page, ToPageSpace(position));
-            HighlightSelection(page);
             e.Handled = true;
             return;
         }
@@ -96,7 +95,6 @@ public partial class MainWindow : Window
         if (_viewModel.CurrentTool == EditorTool.InsertText)
         {
             _viewModel.InsertTextAt(page, ToPageSpace(position));
-            HighlightSelection(page);
             return;
         }
 
@@ -104,7 +102,6 @@ public partial class MainWindow : Window
         {
             // Content editing works on a single click, not a drag.
             _viewModel.SelectObjectAt(page, ToPageSpace(position));
-            HighlightSelection(page);
             return;
         }
 
@@ -213,25 +210,6 @@ public partial class MainWindow : Window
             .Where(a => a.Bounds.Contains(devicePoint))
             .OrderBy(a => a.Bounds.Width * a.Bounds.Height)
             .FirstOrDefault();
-
-    /// <summary>
-    /// Mirrors the view model's selected object onto the page as a highlight box. Bounds come
-    /// back in page points, so they scale by the current zoom to reach device space.
-    /// </summary>
-    private void HighlightSelection(PageViewModel page)
-    {
-        foreach (var other in _viewModel.Pages) other.SelectionBounds = null;
-
-        // An OCR word and a page object are both selectable; whichever is set defines the box.
-        var bounds = _viewModel.SelectedBounds;
-        if (bounds is null) return;
-
-        var b = bounds.Value;
-        page.SelectionBounds = new Rect(
-            b.Left * _viewModel.Zoom, b.Top * _viewModel.Zoom,
-            Math.Max(1, (b.Right - b.Left) * _viewModel.Zoom),
-            Math.Max(1, (b.Bottom - b.Top) * _viewModel.Zoom));
-    }
 
     /// <summary>
     /// Enter commits the in-place edit, Escape abandons it — the keys mainstream editors use,

@@ -319,17 +319,20 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Grid.Column="0" Text="{Binding StatusText}" Foreground="#4B5563"
                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <ProgressBar Width="90" Height="4" IsIndeterminate="True" Margin="0,0,12,0"
                                  VerticalAlignment="Center"
                                  Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
+
+                    <!-- Page box plus total: "第 [3] / 8 页" -->
                     <TextBlock Text="第" Foreground="#374151" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                    <TextBox Width="44" Padding="3,1" VerticalContentAlignment="Center"
-                             TextAlignment="Center"
-                             KeyDown="OnPageNumberKeyDown"
+                    <TextBox Width="42" Padding="3,1" VerticalContentAlignment="Center"
+                             TextAlignment="Center" KeyDown="OnPageNumberKeyDown"
                              ToolTip="输入页码后回车跳转"/>
-                    <TextBlock Text="{Binding PageLabel}" Foreground="#374151"
-                               VerticalAlignment="Center" Margin="600,0,0,0"/>
+                    <TextBlock Text="/" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="5,0"/>
+                    <TextBlock Text="{Binding PageCount}" Foreground="#374151"
+                               VerticalAlignment="Center" MinWidth="18"/>
+                    <TextBlock Text="页" Foreground="#374151" VerticalAlignment="Center" Margin="4,0,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>

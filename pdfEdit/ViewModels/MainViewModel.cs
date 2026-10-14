@@ -92,6 +92,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    public int PageCount => Pages.Count;
+
     public string PageLabel => Pages.Count == 0
         ? "— / —"
         : $"{CurrentPageIndex + 1} / {Pages.Count}";
@@ -745,6 +747,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     SelectedObject = null; // an OCR word is not a page object
                     ContentEditText = word.Text;
                     ContentEditHint = string.Empty;
+                    ShowSelectionOn(page);
                     OnPropertyChanged(nameof(IsOcrSelection));
                     OnPropertyChanged(nameof(SelectionLabel));
 
@@ -774,6 +777,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _selectedObjectPage = page;
             ContentEditText = hit.Text;
             ContentEditHint = string.Empty;
+            ShowSelectionOn(page);
 
             StatusText = $"已选中{hit.TypeLabel}对象" +
                          (hit.FontName.Length > 0 ? $"（字体 {hit.FontName}，{hit.FontSize:0.#}pt）" : "");
@@ -784,11 +788,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Moves the outline onto <paramref name="page"/> and updates it for the current selection.
+    ///
+    /// This lives here rather than in the window's code-behind: when it was only called from the
+    /// mouse handlers, selecting anything by any other route left the outline showing the old
+    /// geometry, or none at all.
+    /// </summary>
+    private void ShowSelectionOn(PageViewModel page)
+    {
+        foreach (var other in Pages) other.SelectionBounds = null;
+
+        if (SelectedBounds is not { } bounds) return;
+
+        var zoom = Zoom;
+        page.SelectionBounds = new Rect(
+            bounds.Left * zoom, bounds.Top * zoom,
+            Math.Max(1, (bounds.Right - bounds.Left) * zoom),
+            Math.Max(1, (bounds.Bottom - bounds.Top) * zoom));
+    }
+
     public void ClearObjectSelection()
     {
         SelectedObject = null;
         _selectedOcrWord = null;
         _editingReplacement = null;
+
+        foreach (var p in Pages) p.SelectionBounds = null;
         _selectedObjectPage = null;
         ContentEditText = string.Empty;
         ContentEditHint = string.Empty;
@@ -1096,6 +1122,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RefreshCommands();
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(PageLabel));
+        OnPropertyChanged(nameof(PageCount));
 
         // Thumbnails are cheap at this size and let the sidebar fill in immediately.
         _ = RenderThumbnailsAsync();
@@ -1426,6 +1453,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _selectedObjectPage = page;
         ContentEditText = replacement.Text;
         ContentEditHint = string.Empty;
+        ShowSelectionOn(page);
 
         OnPropertyChanged(nameof(IsReplacementSelection));
         OnPropertyChanged(nameof(SelectionLabel));

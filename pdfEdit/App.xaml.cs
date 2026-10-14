@@ -61,6 +61,37 @@ public partial class App : Application
         };
     }
 
+    /// <summary>Renders the window's visual tree to a PNG so a run can be inspected visually.</summary>
+    private static void CaptureWindow(Window window, string path)
+    {
+        try
+        {
+            // Force a layout and render pass first. Without this the capture happens before
+            // WPF has arranged anything that just became visible, and the shot comes out with
+            // those elements missing entirely.
+            window.UpdateLayout();
+            window.Dispatcher.Invoke(() => { },
+                System.Windows.Threading.DispatcherPriority.Render);
+
+            var width = (int)Math.Max(1, window.ActualWidth);
+            var height = (int)Math.Max(1, window.ActualHeight);
+
+            var target = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                width, height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+            target.Render(window);
+
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(target));
+
+            using var stream = File.Create(path);
+            encoder.Save(stream);
+        }
+        catch (Exception ex)
+        {
+            File.AppendAllText(path + ".error.txt", ex.ToString());
+        }
+    }
+
     /// <summary>Set while running --selftest / --uitest, where a modal dialog would deadlock.</summary>
     private static bool _headless;
 
@@ -144,6 +175,20 @@ public partial class App : Application
                     }
 
                     // Reverse the string: same glyphs, so this must succeed even with a subset font.
+                    // Where does the inline editor actually land, and how big is it?
+                    var selPage = vm.Pages[0];
+                    log.AppendLine($"选中框: left={selPage.SelectionLeft:0.#} top={selPage.SelectionTop:0.#} " +
+                                   $"width={selPage.SelectionWidth:0.#} (zoom={vm.Zoom:0.##})");
+                    log.AppendLine($"页尺寸: {selPage.DisplayWidth:0.#} x {selPage.DisplayHeight:0.#} px");
+                    var pb = picked.Bounds;
+                    log.AppendLine($"对象范围(pt): ({pb.Left:0.#},{pb.Top:0.#})-({pb.Right:0.#},{pb.Bottom:0.#}) " +
+                                   $"→ 应为 {pb.Left * vm.Zoom:0.#},{pb.Top * vm.Zoom:0.#} " +
+                                   $"宽 {(pb.Right - pb.Left) * vm.Zoom:0.#}");
+
+                    // Capture the window so the result can actually be looked at, rather than
+                    // inferred from property values.
+                    CaptureWindow(window, Path.Combine(AppContext.BaseDirectory, "shot_editor.png"));
+
                     vm.ContentEditText = new string(picked.Text.Reverse().ToArray());
                     vm.ApplyContentEditCommand.Execute(null);
                     log.AppendLine($"改写后状态: {vm.StatusText}");
@@ -152,6 +197,12 @@ public partial class App : Application
                         ? $"提示: {vm.ContentEditHint}"
                         : "无提示（改写被接受）");
                 }
+
+                // Re-capture now that the UI has settled: selects the text again so the inline
+                // editor is on screen, then takes the shot.
+                vm.CurrentTool = ViewModels.EditorTool.EditContent;
+                vm.SelectObjectAt(vm.Pages[0], new System.Windows.Point(297, 264));
+                CaptureWindow(window, Path.Combine(AppContext.BaseDirectory, "shot_settled.png"));
 
                 log.AppendLine(first?.Image is null ? "UI 冒烟测试失败: 首页未渲染" : "UI 冒烟测试通过");
 
