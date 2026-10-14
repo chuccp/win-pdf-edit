@@ -527,7 +527,8 @@
                                             <Border Canvas.Left="{Binding SelectionLeft}"
                                                     Canvas.Top="{Binding SelectionTop}"
                                                     Width="{Binding SelectionWidth}"
-                                                    MinWidth="60"
+                                                    Height="{Binding SelectionHeight}"
+                                                    MinWidth="60" MinHeight="16"
                                                     Background="White" BorderBrush="#2563EB"
                                                     BorderThickness="1.5" CornerRadius="1">
                                                 <TextBox x:Name="InlineEditor"
@@ -538,6 +539,8 @@
                                                                              RelativeSource={RelativeSource AncestorType=Window}}"
                                                          Padding="2,0" BorderThickness="0"
                                                          Background="Transparent"
+                                                         FontSize="{Binding DataContext.SelectionFontSize,
+                                                                             RelativeSource={RelativeSource AncestorType=Window}}"
                                                          VerticalContentAlignment="Center"
                                                          KeyDown="OnInlineEditorKeyDown"
                                                          IsVisibleChanged="OnInlineEditorVisibleChanged"

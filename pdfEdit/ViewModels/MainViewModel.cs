@@ -576,6 +576,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(SelectedBounds));
             OnPropertyChanged(nameof(IsOcrSelection));
             OnPropertyChanged(nameof(IsReplacementSelection));
+            OnPropertyChanged(nameof(SelectionFontSize));
 
             ApplyContentEditCommand.RaiseCanExecuteChanged();
             DeleteContentObjectCommand.RaiseCanExecuteChanged();
@@ -680,6 +681,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// Whether the selected thing can be retyped. Recognised words always can; a page object
     /// only when it is actually text.
     /// </summary>
+    /// <summary>
+    /// Font size the field should render at, so the text being edited looks the same size as
+    /// the text it replaces. Falls back to the toolbar's size for newly inserted text.
+    /// </summary>
+    public double SelectionFontSize
+    {
+        get
+        {
+            var zoom = Zoom <= 0 ? 1 : Zoom;
+
+            double points;
+            if (_editingReplacement is { } replacement)
+                points = replacement.FontSize;
+            else if (_selectedOcrWord is { } word)
+                points = (word.Bounds.Bottom - word.Bounds.Top) * 0.88;
+            else if (SelectedObject is { FontSize: > 0 } obj)
+                points = obj.FontSize;
+            else
+                points = EditFontSize;
+
+            return Math.Clamp(points * zoom, 6, 200);
+        }
+    }
+
     public bool CanEditSelection =>
         _editingReplacement is not null ||
         _selectedOcrWord is not null ||

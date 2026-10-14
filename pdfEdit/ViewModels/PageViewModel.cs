@@ -170,6 +170,7 @@ public sealed class PageViewModel : ObservableObject
             OnPropertyChanged(nameof(SelectionLeft));
             OnPropertyChanged(nameof(SelectionTop));
             OnPropertyChanged(nameof(SelectionWidth));
+            OnPropertyChanged(nameof(SelectionHeight));
         }
     }
 
@@ -184,6 +185,13 @@ public sealed class PageViewModel : ObservableObject
 
     /// <summary>Width of the edited region, so the field covers the text it stands in for.</summary>
     public double SelectionWidth => _selectionBounds?.Width ?? 0;
+
+    /// <summary>
+    /// Height too: if the field is shorter than the text it replaces, the original glyphs show
+    /// through underneath and the edit reads as a box pasted over the page rather than as the
+    /// text itself becoming editable.
+    /// </summary>
+    public double SelectionHeight => _selectionBounds?.Height ?? 0;
 
     private RenderState _state = RenderState.Pending;
     public RenderState State
