@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using PdfEdit.Common;
 using PdfEdit.Models;
@@ -220,6 +221,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ExportImagesCommand { get; }
     public RelayCommand<AnnotationSpec> DeleteAnnotationCommand { get; }
     public RelayCommand UndoCommand { get; }
+    public RelayCommand<string> OpenRecentCommand { get; }
     public RelayCommand RedoCommand { get; }
     public RelayCommand RunOcrCommand { get; }
     public RelayCommand RunOcrAllCommand { get; }
@@ -229,6 +231,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public MainViewModel()
     {
+        LoadRecentFiles();
         OpenCommand = new RelayCommand(Open);
         SaveCommand = new RelayCommand(() => Save(FilePath), () => HasDocument);
         SaveAsCommand = new RelayCommand(SaveAs, () => HasDocument);
@@ -261,6 +264,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         AddPageNumbersCommand = new RelayCommand(AddPageNumbers, () => HasDocument);
         ExportImagesCommand = new RelayCommand(ExportImages, () => HasDocument);
         DeleteAnnotationCommand = new RelayCommand<AnnotationSpec>(RemoveAnnotation);
+        OpenRecentCommand = new RelayCommand<string>(p => { if (p is not null) OpenFile(p); });
         UndoCommand = new RelayCommand(Undo, () => _undoStack.Count > 0);
         RedoCommand = new RelayCommand(Redo, () => _redoStack.Count > 0);
         RunOcrCommand = new RelayCommand(() => _ = RunOcrAsync(singlePage: true), () => HasDocument);
@@ -1135,17 +1139,176 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void OpenFile(string path)
     {
+        byte[] bytes;
         try
         {
-            var bytes = File.ReadAllBytes(path);
-            LoadDocument(bytes, path);
+            bytes = File.ReadAllBytes(path);
         }
         catch (Exception ex)
         {
-            MessageBox.Show($"无法打开文件：\n{ex.Message}", "打开失败",
+            MessageBox.Show($"无法读取文件：\n{ex.Message}", "打开失败",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Encrypted documents get a few attempts; anything else is reported as-is.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                LoadDocument(bytes, path);
+                RememberRecent(path);
+                return;
+            }
+            catch (PdfPasswordRequiredException)
+            {
+                var password = PromptForPassword(Path.GetFileName(path), attempt > 0);
+                if (password is null) return;
+
+                try
+                {
+                    LoadDocument(bytes, path, PdfiumEngine.Open(bytes, path, password));
+                    RememberRecent(path);
+                    return;
+                }
+                catch (PdfPasswordRequiredException)
+                {
+                    // Wrong password: loop round and ask again.
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"无法打开文件：\n{ex.Message}", "打开失败",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"无法打开文件：\n{ex.Message}", "打开失败",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+
+        MessageBox.Show("密码错误次数过多。", "打开失败",
+            MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    /// <summary>Minimal password prompt. Null when the user cancels.</summary>
+    private static string? PromptForPassword(string fileName, bool retry)
+    {
+        var window = new Window
+        {
+            Title = retry ? "密码错误，请重试" : "该文档已加密",
+            Width = 400, Height = 180,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = Application.Current?.MainWindow,
+            ResizeMode = ResizeMode.NoResize,
+        };
+
+        var box = new PasswordBox { Padding = new Thickness(6, 4, 6, 4), Margin = new Thickness(0, 0, 0, 12) };
+        var ok = new Button { Content = "打开", IsDefault = true, MinWidth = 84, Padding = new Thickness(18, 5, 18, 5) };
+        var cancel = new Button { Content = "取消", IsCancel = true, MinWidth = 84, Padding = new Thickness(18, 5, 18, 5), Margin = new Thickness(8, 0, 0, 0) };
+
+        string? result = null;
+        ok.Click += (_, _) => { result = box.Password; window.DialogResult = true; };
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+
+        var panel = new StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"{fileName} 需要密码才能打开。",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 12),
+        });
+        panel.Children.Add(box);
+        panel.Children.Add(buttons);
+
+        window.Content = panel;
+        window.Loaded += (_, _) => box.Focus();
+
+        return window.ShowDialog() == true ? result : null;
+    }
+
+    /// <summary>Recently opened files, most recent first.</summary>
+    public ObservableCollection<string> RecentFiles { get; } = [];
+
+    private static string RecentListPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "PdfEdit", "recent.txt");
+
+    private void RememberRecent(string path)
+    {
+        try
+        {
+            RecentFiles.Remove(path);
+            RecentFiles.Insert(0, path);
+
+            while (RecentFiles.Count > 10) RecentFiles.RemoveAt(RecentFiles.Count - 1);
+
+            var dir = Path.GetDirectoryName(RecentListPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllLines(RecentListPath, RecentFiles);
+        }
+        catch
+        {
+            // A missing recent list is not worth interrupting anyone over.
         }
     }
+
+    private void LoadRecentFiles()
+    {
+        try
+        {
+            if (!File.Exists(RecentListPath)) return;
+
+            foreach (var line in File.ReadAllLines(RecentListPath))
+                if (!string.IsNullOrWhiteSpace(line)) RecentFiles.Add(line);
+        }
+        catch
+        {
+            // Same reasoning as above.
+        }
+    }
+
+    /// <summary>
+    /// Moves the selection to the next (or previous) editable region, ordered top-to-bottom then
+    /// left-to-right, so a run of edits does not need a click for each one.
+    /// </summary>
+    public void StepSelection(int direction)
+    {
+        if (_engine is null || _selectedObjectPage is not { } page) return;
+
+        var regions = _engine.GetPageObjects(page.SourceIndex)
+            .Where(o => o.IsText && !string.IsNullOrWhiteSpace(o.Text))
+            .OrderBy(o => o.Bounds.Top)
+            .ThenBy(o => o.Bounds.Left)
+            .ToList();
+
+        if (regions.Count == 0) return;
+
+        var currentPath = SelectedObject?.Path;
+        var index = currentPath is null
+            ? -1
+            : regions.FindIndex(o => o.Path.SequenceEqual(currentPath));
+
+        var next = index < 0 ? 0 : (index + direction + regions.Count) % regions.Count;
+        var target = regions[next];
+
+        SelectedObject = target;
+        _selectedObjectPage = page;
+        ContentEditText = target.Text;
+        ContentEditHint = string.Empty;
+        ShowSelectionOn(page);
+
+        var label = target.Text.Length <= 18 ? target.Text : target.Text[..18] + "…";
+        StatusText = $"已选中「{label}」（Tab 切换下一处）";
+    }
+
+
 
     private void Open()
     {
@@ -1158,12 +1321,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (dialog.ShowDialog() == true) OpenFile(dialog.FileName);
     }
 
-    private void LoadDocument(byte[] bytes, string path)
+    private void LoadDocument(byte[] bytes, string path, PdfiumEngine? opened = null)
     {
         _renderer?.Dispose();
         _engine?.Dispose();
 
-        var engine = PdfiumEngine.Open(bytes, path);
+        var engine = opened ?? PdfiumEngine.Open(bytes, path);
         var renderer = new RenderService(engine);
 
         _engine = engine;

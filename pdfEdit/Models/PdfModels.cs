@@ -218,3 +218,13 @@ public sealed class AnnotationSpec
         Bottom = r.Bottom;
     }
 }
+
+/// <summary>
+/// Raised when a document cannot be opened without a password. Kept distinct from a generic
+/// open failure so the caller can ask for one rather than calling the file corrupt.
+/// </summary>
+public sealed class PdfPasswordRequiredException : Exception
+{
+    public PdfPasswordRequiredException()
+        : base("文档已加密，需要密码。") { }
+}

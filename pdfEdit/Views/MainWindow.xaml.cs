@@ -364,6 +364,12 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
 
+            case Key.Tab when _viewModel.IsEditMode:
+                // Walk the page is regions instead of moving focus out of the canvas.
+                _viewModel.StepSelection((Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? -1 : 1);
+                e.Handled = true;
+                break;
+
             case Key.Escape:
                 _viewModel.CurrentTool = EditorTool.Select;
                 e.Handled = true;
