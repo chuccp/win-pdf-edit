@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text;
+using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using PdfEdit.Models;
@@ -429,6 +430,77 @@ internal static class SelfTest
                                     Ok("改写已绘制到页面上");
                                 else
                                     Fail("改写未反映到渲染结果");
+                            }
+                        }
+
+                        // --- texture-aware cover-up ---
+                        var tintedSource = BuildTintedScan(engine.RenderPage(0, 2.0));
+                        var tintedScan = BuildScanPdf(tintedSource, out var tintW, out var tintH);
+                        File.WriteAllBytes(Path.Combine(outDir, "scan_tinted.pdf"), tintedScan);
+
+                        using (var tintEngine = PdfiumEngine.Open(tintedScan, null))
+                        {
+                            var scale2 = OcrService.SafeScaleFor(tintW, tintH) ?? 2.0;
+                            var tintWords = Task.Run(() =>
+                                    OcrService.RecognizeAsync(tintEngine.RenderPage(0, scale2), scale2))
+                                .GetAwaiter().GetResult();
+
+                            var victim = tintWords.FirstOrDefault(w => w.Text.Trim().Length > 0);
+                            if (victim is null)
+                            {
+                                Fail("底色样张未识别出文字");
+                            }
+                            else
+                            {
+                                var surrounding = MeanColour(
+                                    tintEngine.RenderPage(0, 1.0), victim.Bounds, 1.0);
+                                Info($"周围底色: R{surrounding.R:0} G{surrounding.G:0} B{surrounding.B:0}" +
+                                     "  (纯白填充会是 255,255,255)");
+
+                                var tintModel = new DocumentModel();
+                                tintModel.Load(tintedScan, null);
+                                var tintPage = new PageItem { SourceIndex = 0 };
+                                tintModel.Pages.Add(tintPage);
+
+                                var tintedVmPage = new ViewModels.PageViewModel(tintPage, tintW, tintH)
+                                {
+                                    Image = tintEngine.RenderPage(0, 1.0),
+                                };
+
+                                var patch = InvokeExtractPatch(tintedVmPage, victim.Bounds);
+                                Info($"背景补丁: {(patch is null ? "未取得（回退纯色）" : patch.Length + " 字节")}");
+
+                                tintModel.TextReplacements.Add(new TextReplacement
+                                {
+                                    Page = tintPage,
+                                    Bounds = victim.Bounds,
+                                    Text = "改写",
+                                    FontSize = Math.Max(6, victim.Bounds.Bottom - victim.Bounds.Top) * 0.88,
+                                    FontFamily = PdfExportService.TextLayerFont,
+                                    RedactBackground = true,
+                                    BackgroundPatch = patch,
+                                    BackgroundR = 255, BackgroundG = 255, BackgroundB = 255,
+                                });
+
+                                var patched = DocumentExporter.Export(tintModel);
+                                File.WriteAllBytes(Path.Combine(outDir, "scan_patched.pdf"), patched);
+
+                                using (var check2 = PdfiumEngine.Open(patched, null))
+                                {
+                                    var after = MeanColour(check2.RenderPage(0, 1.0), victim.Bounds, 1.0);
+                                    var dr = Math.Abs(after.R - surrounding.R);
+                                    var dg = Math.Abs(after.G - surrounding.G);
+                                    var db = Math.Abs(after.B - surrounding.B);
+                                    Info($"补丁区域底色: R{after.R:0} G{after.G:0} B{after.B:0}" +
+                                         $"  (与周围差 {dr:0}/{dg:0}/{db:0})");
+
+                                    if (patch is null)
+                                        Info("页面未提供可用补丁，本项跳过");
+                                    else if (dr < 12 && dg < 12 && db < 12)
+                                        Ok("纹理补丁与周围底色一致，未留下色块");
+                                    else
+                                        Fail($"补丁区域与周围底色不符（差 {dr:0}/{dg:0}/{db:0}）");
+                                }
                             }
                         }
 
@@ -1013,6 +1085,78 @@ internal static class SelfTest
                 }
             }
         }
+    }
+
+    /// <summary>Reaches the private patch extractor so the test exercises the real code path.</summary>
+    private static byte[]? InvokeExtractPatch(ViewModels.PageViewModel page, TextRect box)
+    {
+        var method = typeof(ViewModels.MainViewModel).GetMethod("ExtractBackgroundPatch",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        return method?.Invoke(null, [page, box]) as byte[];
+    }
+
+    /// <summary>
+    /// Renders a page onto a tinted, mottled background, imitating an aged or coloured scan.
+    /// A flat cover-up stands out badly on this; a copied patch should not.
+    /// </summary>
+    private static BitmapSource BuildTintedScan(BitmapSource page)
+    {
+        var w = page.PixelWidth;
+        var h = page.PixelHeight;
+        var stride = w * 4;
+
+        var source = new byte[stride * h];
+        page.CopyPixels(source, stride, 0);
+
+        var output = new byte[stride * h];
+        var random = new Random(7);
+
+        for (var y = 0; y < h; y++)
+        for (var x = 0; x < w; x++)
+        {
+            var i = y * stride + x * 4;
+            var lum = (source[i] * 114 + source[i + 1] * 587 + source[i + 2] * 299) / 1000;
+
+            var grain = random.Next(-6, 7);
+            var r = lum < 160 ? source[i] : (byte)232;
+            var g = lum < 160 ? source[i + 1] : (byte)222;
+            var b = lum < 160 ? source[i + 2] : (byte)198;
+
+            output[i] = (byte)Math.Clamp(r + (lum < 160 ? 0 : grain), 0, 255);
+            output[i + 1] = (byte)Math.Clamp(g + (lum < 160 ? 0 : grain), 0, 255);
+            output[i + 2] = (byte)Math.Clamp(b + (lum < 160 ? 0 : grain), 0, 255);
+            output[i + 3] = 255;
+        }
+
+        var bmp = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, output, stride);
+        bmp.Freeze();
+        return bmp;
+    }
+
+    /// <summary>Mean background colour of a region, skipping ink pixels.</summary>
+    private static (double R, double G, double B) MeanColour(BitmapSource image, TextRect box, double scale)
+    {
+        var x = (int)Math.Max(0, box.Left * scale);
+        var y = (int)Math.Max(0, box.Top * scale);
+        var w = (int)Math.Min(image.PixelWidth - x, (box.Right - box.Left) * scale);
+        var h = (int)Math.Min(image.PixelHeight - y, (box.Bottom - box.Top) * scale);
+        if (w <= 0 || h <= 0) return (0, 0, 0);
+
+        var stride = w * 4;
+        var pixels = new byte[stride * h];
+        image.CopyPixels(new Int32Rect(x, y, w, h), pixels, stride, 0);
+
+        double r = 0, g = 0, b = 0;
+        var n = 0;
+        for (var i = 0; i < pixels.Length; i += 4)
+        {
+            var lum = (pixels[i] * 114 + pixels[i + 1] * 587 + pixels[i + 2] * 299) / 1000;
+            if (lum < 160) continue;
+            r += pixels[i]; g += pixels[i + 1]; b += pixels[i + 2]; n++;
+        }
+
+        return n == 0 ? (0, 0, 0) : (r / n, g / n, b / n);
     }
 
     /// <summary>Counts pixels darker than near-white — i.e. anything actually drawn.</summary>

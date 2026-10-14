@@ -110,6 +110,16 @@ public sealed class TextReplacement
     public byte BackgroundB { get; set; } = 255;
 
     /// <summary>
+    /// Background patch (PNG) lifted from a clean area of the same page, drawn over the original
+    /// words before the new text goes down.
+    ///
+    /// A flat fill sampled from around the text leaves a visible rectangle wherever the page is
+    /// not uniform — paper texture, tinted scans, gradients, stamps. Copying real pixels from a
+    /// nearby blank region carries that texture across, so the patch blends in.
+    /// </summary>
+    public byte[]? BackgroundPatch { get; set; }
+
+    /// <summary>
     /// Page object this replacement supersedes, deleted at export.
     ///
     /// The deletion is deferred rather than done when the user applies the edit: a removed

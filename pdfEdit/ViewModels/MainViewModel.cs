@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using PdfEdit.Common;
 using PdfEdit.Models;
 using PdfEdit.Services;
@@ -856,48 +857,102 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Picks the colour to paint over a scanned word with, by sampling the rendered page just
-    /// outside the word's box where the original text is unlikely to reach. Falls back to white,
-    /// which is right for most scans.
+    /// Lifts a background patch from a blank area of the same page to cover a scanned word.
+    ///
+    /// A flat colour sampled near the text leaves a visible rectangle wherever the page is not
+    /// uniform. Copying real pixels carries paper texture, scan tint and lighting gradients
+    /// across, so the cover-up blends instead of reading as a pasted block.
+    ///
+    /// Candidate regions are scored by how little ink they contain; the cleanest wins. Returns
+    /// null when the page offers nothing usable, in which case the caller falls back to a fill.
     /// </summary>
-    private static (byte R, byte G, byte B) SampleBackground(PageViewModel page, TextRect box)
+    private static byte[]? ExtractBackgroundPatch(PageViewModel page, TextRect box)
     {
-        if (page.Image is not { } image) return (255, 255, 255);
+        if (page.Image is not { } image) return null;
 
         var zoom = page.Zoom <= 0 ? 1 : page.Zoom;
 
-        // A band sitting just above the words, sampled across their width.
-        var sampleY = (int)Math.Round(box.Top * zoom) - 3;
         var left = (int)Math.Round(box.Left * zoom);
-        var right = (int)Math.Round(box.Right * zoom);
+        var top = (int)Math.Round(box.Top * zoom);
+        var width = (int)Math.Round((box.Right - box.Left) * zoom);
+        var height = (int)Math.Round((box.Bottom - box.Top) * zoom);
 
-        if (sampleY < 0 || sampleY >= image.PixelHeight || right <= left) return (255, 255, 255);
+        if (width < 2 || height < 2) return null;
 
-        var width = Math.Min(right - left, 64);
-        if (width <= 0) return (255, 255, 255);
+        // Offsets to try, in units of the box height. Straight above and below a line are the
+        // likeliest blank strips; the wider steps handle dense layouts.
+        var candidates = new (int dx, int dy)[]
+        {
+            (0, -2), (0, 2), (0, -3), (0, 3),
+            (-1, -2), (1, -2), (-1, 2), (1, 2),
+            (0, -4), (0, 4),
+        };
 
+        var best = (score: int.MaxValue, rect: default(Int32Rect));
+
+        foreach (var (dx, dy) in candidates)
+        {
+            var x = left + dx * width;
+            var y = top + dy * height;
+
+            if (x < 0 || y < 0 || x + width > image.PixelWidth || y + height > image.PixelHeight)
+                continue;
+
+            var ink = CountInk(image, new Int32Rect(x, y, width, height));
+            if (ink < best.score) best = (ink, new Int32Rect(x, y, width, height));
+
+            // A region with essentially no ink is good enough; stop looking.
+            if (ink == 0) break;
+        }
+
+        if (best.rect.Width == 0) return null;
+
+        // Refuse a patch that is itself mostly ink — it would smear the neighbouring text across.
+        var area = best.rect.Width * best.rect.Height;
+        if (best.score > area / 20) return null;
+
+        return EncodePatch(image, best.rect);
+    }
+
+    /// <summary>Counts pixels dark enough to be ink rather than background.</summary>
+    private static int CountInk(BitmapSource image, Int32Rect rect)
+    {
         try
         {
-            var pixels = new byte[width * 4];
-            image.CopyPixels(new Int32Rect(left, sampleY, width, 1), pixels, width * 4, 0);
+            var stride = rect.Width * 4;
+            var pixels = new byte[stride * rect.Height];
+            image.CopyPixels(rect, pixels, stride, 0);
 
-            // Median-ish: average is thrown off by a speck of ink or a stamp edge.
-            var rs = new List<byte>(width);
-            var gs = new List<byte>(width);
-            var bs = new List<byte>(width);
-            for (var i = 0; i < width; i++)
+            var ink = 0;
+            for (var i = 0; i < pixels.Length; i += 4)
             {
-                rs.Add(pixels[i * 4]);
-                gs.Add(pixels[i * 4 + 1]);
-                bs.Add(pixels[i * 4 + 2]);
+                // Luma, so a coloured stamp or highlight also counts as ink.
+                var luma = (pixels[i] * 114 + pixels[i + 1] * 587 + pixels[i + 2] * 299) / 1000;
+                if (luma < 200) ink++;
             }
-
-            rs.Sort(); gs.Sort(); bs.Sort();
-            return (rs[width / 2], gs[width / 2], bs[width / 2]);
+            return ink;
         }
         catch
         {
-            return (255, 255, 255);
+            return int.MaxValue;
+        }
+    }
+
+    private static byte[]? EncodePatch(BitmapSource image, Int32Rect rect)
+    {
+        try
+        {
+            var cropped = new CroppedBitmap(image, rect);
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(cropped));
+
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            return stream.ToArray();
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -934,7 +989,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 return;
             }
 
-            var (bgR, bgG, bgB) = SampleBackground(page, ocrWord.Bounds);
+            var patch = ExtractBackgroundPatch(page, ocrWord.Bounds);
 
             _model.TextReplacements.Add(new TextReplacement
             {
@@ -944,9 +999,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 FontSize = Math.Max(6, ocrWord.Bounds.Bottom - ocrWord.Bounds.Top) * 0.88,
                 FontFamily = PdfExportService.TextLayerFont,
                 RedactBackground = true,
-                BackgroundR = bgR,
-                BackgroundG = bgG,
-                BackgroundB = bgB,
+                BackgroundPatch = patch,
                 R = 20, G = 20, B = 20,
             });
 

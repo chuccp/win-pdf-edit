@@ -157,10 +157,26 @@ public static class PdfExportService
 
                 if (replacement.RedactBackground)
                 {
-                    gfx.DrawRectangle(
-                        new XSolidBrush(XColor.FromArgb(
-                            replacement.BackgroundR, replacement.BackgroundG, replacement.BackgroundB)),
-                        x, y, boxW, boxH);
+                    if (replacement.BackgroundPatch is { Length: > 0 } patch)
+                    {
+                        // Real pixels from a nearby blank area: carries paper texture and any
+                        // tint across, so the cover-up does not read as a pasted rectangle.
+                        try
+                        {
+                            using var stream = new MemoryStream(patch, writable: false);
+                            using var image = XImage.FromStream(stream);
+                            gfx.DrawImage(image, x, y, boxW, boxH);
+                        }
+                        catch
+                        {
+                            // A malformed patch should not lose the edit; fall through to flat fill.
+                            DrawFlatCover(gfx, replacement, x, y, boxW, boxH);
+                        }
+                    }
+                    else
+                    {
+                        DrawFlatCover(gfx, replacement, x, y, boxW, boxH);
+                    }
                 }
 
                 var font = new XFont(replacement.FontFamily, replacement.FontSize);
@@ -187,6 +203,14 @@ public static class PdfExportService
             }
         }
     }
+
+    /// <summary>Plain colour cover-up, used when no usable background patch was captured.</summary>
+    private static void DrawFlatCover(XGraphics gfx, TextReplacement replacement,
+        double x, double y, double boxW, double boxH)
+        => gfx.DrawRectangle(
+            new XSolidBrush(XColor.FromArgb(
+                replacement.BackgroundR, replacement.BackgroundG, replacement.BackgroundB)),
+            x, y, boxW, boxH);
 
     // ------------------------------------------------------------------ OCR text layer
 
