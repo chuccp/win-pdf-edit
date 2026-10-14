@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <!--
+          The Windows SDK version suffix is what makes the WinRT projections available — the
+          built-in OCR engine (Windows.Media.Ocr) is reached through them. Plain `net10.0-windows`
+          has no access to it.
+        -->
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <UseWPF>true</UseWPF>
+        <AssemblyName>PdfEdit</AssemblyName>
+        <RootNamespace>PdfEdit</RootNamespace>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <!--
+          PDFium ships its native binaries under runtimes/<rid>/native/. The package's own
+          .targets file lives in build/native/, which MSBuild only imports for C++ projects,
+          so a .NET build must go through RID-based asset resolution to get pdfium.dll copied.
+        -->
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <SelfContained>false</SelfContained>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Rendering: PDFium native renderer, MIT -->
+        <PackageReference Include="PDFtoImage" Version="5.2.0" />
+        <!-- Text extraction + search, Apache-2.0 -->
+        <PackageReference Include="PdfPig" Version="0.1.14" />
+        <!-- Page operations, overlays, annotations, MIT -->
+        <PackageReference Include="PDFsharp" Version="6.2.3" />
+    </ItemGroup>
+
+</Project>

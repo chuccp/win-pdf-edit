@@ -1,0 +1,592 @@
+<Window x:Class="PdfEdit.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:PdfEdit.Views"
+        xmlns:vm="clr-namespace:PdfEdit.ViewModels"
+        Title="{Binding Title}" Height="860" Width="1360"
+        AllowDrop="True" Drop="OnFileDrop" DragOver="OnDragOver"
+        Background="#F3F4F6" FontFamily="Microsoft YaHei UI, Segoe UI" FontSize="12">
+
+    <Window.Resources>
+        <local:EnumToBoolConverter x:Key="EnumToBool"/>
+        <local:InverseBoolConverter x:Key="InverseBool"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
+        <!-- Annotation shapes. Templates are declared before the selector that references them,
+             since StaticResource resolves in declaration order. -->
+
+        <DataTemplate x:Key="BoxTpl">
+            <Rectangle Width="{Binding Bounds.Width}" Height="{Binding Bounds.Height}"
+                       Fill="{Binding Fill}" Stroke="{Binding Stroke}"
+                       StrokeThickness="{Binding StrokeThickness}"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="EllipseTpl">
+            <Ellipse Width="{Binding Bounds.Width}" Height="{Binding Bounds.Height}"
+                     Fill="{Binding Fill}" Stroke="{Binding Stroke}"
+                     StrokeThickness="{Binding StrokeThickness}"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="LineTpl">
+            <Line X1="0" Y1="{Binding LineY}" X2="{Binding Bounds.Width}" Y2="{Binding LineY}"
+                  Stroke="{Binding Stroke}" StrokeThickness="{Binding StrokeThickness}"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="InkTpl">
+            <Polyline Points="{Binding InkPoints}" Stroke="{Binding Stroke}"
+                      StrokeThickness="{Binding StrokeThickness}"
+                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="NoteTpl">
+            <Grid Width="{Binding Bounds.Width}" Height="{Binding Bounds.Height}">
+                <Rectangle Fill="{Binding Fill}" Stroke="#B45309" StrokeThickness="1" RadiusX="3" RadiusY="3"/>
+                <TextBlock Text="&#xE70B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
+                           Foreground="#7C2D12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+        </DataTemplate>
+
+        <local:AnnotationTemplateSelector x:Key="AnnotSelector"
+                                          BoxTemplate="{StaticResource BoxTpl}"
+                                          EllipseTemplate="{StaticResource EllipseTpl}"
+                                          InkTemplate="{StaticResource InkTpl}"
+                                          NoteTemplate="{StaticResource NoteTpl}"
+                                          LineTemplate="{StaticResource LineTpl}"/>
+
+        <!-- Toolbar chrome. Buttons and toggles need separate templates: a ControlTemplate
+             trigger can only bind properties its target type declares, and IsChecked lives on
+             ToggleButton rather than ButtonBase. -->
+        <ControlTemplate x:Key="ToolButtonChrome" TargetType="ButtonBase">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5" Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Bd" Property="Background" Value="#E5E7EB"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.35"/>
+                    <Setter TargetName="Bd" Property="Background" Value="Transparent"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <ControlTemplate x:Key="ToolToggleChrome" TargetType="ToggleButton">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="5" Padding="{TemplateBinding Padding}">
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Bd" Property="Background" Value="#E5E7EB"/>
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter TargetName="Bd" Property="Background" Value="#DBEAFE"/>
+                    <Setter TargetName="Bd" Property="BorderBrush" Value="#3B82F6"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.35"/>
+                </Trigger>
+            </ControlTemplate.Triggers>
+        </ControlTemplate>
+
+        <Style x:Key="ToolButton" TargetType="Button">
+            <Setter Property="Padding" Value="9,5"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="#1F2937"/>
+            <Setter Property="Template" Value="{StaticResource ToolButtonChrome}"/>
+        </Style>
+
+        <Style x:Key="ToolToggle" TargetType="ToggleButton">
+            <Setter Property="Padding" Value="9,5"/>
+            <Setter Property="Margin" Value="1,0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="#1F2937"/>
+            <Setter Property="Template" Value="{StaticResource ToolToggleChrome}"/>
+        </Style>
+
+        <Style x:Key="Bar" TargetType="Rectangle">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Margin" Value="6,3"/>
+            <Setter Property="Fill" Value="#D1D5DB"/>
+        </Style>
+
+        <Style TargetType="TextBlock" x:Key="Hint">
+            <Setter Property="Foreground" Value="#9CA3AF"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="12"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+
+        <!-- ============================ Toolbar ============================ -->
+        <Border DockPanel.Dock="Top" Background="White" BorderBrush="#E5E7EB" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" Margin="8,6" VerticalAlignment="Center">
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding OpenCommand}" ToolTip="打开 PDF (Ctrl+O)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8E5;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                        <TextBlock Text="打开" Margin="6,0,0,0"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding SaveCommand}" ToolTip="保存 (Ctrl+S)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE74E;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                        <TextBlock Text="保存" Margin="6,0,0,0"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding SaveAsCommand}" Content="另存为"/>
+
+                <Rectangle Style="{StaticResource Bar}"/>
+
+                <!-- Mode switch. Everything editing-related to its right appears only when
+                     this is on, so reading stays uncluttered. -->
+                <ToggleButton Style="{StaticResource ToolToggle}" IsChecked="{Binding IsEditMode}"
+                              ToolTip="切换阅读 / 编辑模式">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding ModeLabel}" Margin="6,0,0,0" MinWidth="52"/>
+                    </StackPanel>
+                </ToggleButton>
+
+                <Rectangle Style="{StaticResource Bar}"/>
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding UndoCommand}"
+                        ToolTip="{Binding UndoLabel}" Content="&#xE7A7;" FontFamily="Segoe MDL2 Assets"/>
+                <Button Style="{StaticResource ToolButton}" Command="{Binding RedoCommand}"
+                        ToolTip="{Binding RedoLabel}" Content="&#xE7A8;" FontFamily="Segoe MDL2 Assets"/>
+
+                <Rectangle Style="{StaticResource Bar}"/>
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}" Content="&#x2212;" FontSize="14"/>
+                <TextBlock Text="{Binding ZoomPercent}" VerticalAlignment="Center" MinWidth="46"
+                           TextAlignment="Center" Foreground="#374151"/>
+                <Button Style="{StaticResource ToolButton}" Command="{Binding ZoomInCommand}" Content="+" FontSize="14"/>
+                <Button Style="{StaticResource ToolButton}" Command="{Binding ZoomResetCommand}" Content="100%"/>
+                <Button Style="{StaticResource ToolButton}" Command="{Binding ZoomFitWidthCommand}"
+                        Content="适宽" ToolTip="适合宽度"/>
+                <Button Style="{StaticResource ToolButton}" Command="{Binding ZoomFitPageCommand}"
+                        Content="适页" ToolTip="适合页面"/>
+
+                <Rectangle Style="{StaticResource Bar}"/>
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding PreviousPageCommand}"
+                        Content="&#xE76B;" FontFamily="Segoe MDL2 Assets" ToolTip="上一页 (PageUp)"/>
+                <Button Style="{StaticResource ToolButton}" Command="{Binding NextPageCommand}"
+                        Content="&#xE76C;" FontFamily="Segoe MDL2 Assets" ToolTip="下一页 (PageDown)"/>
+
+                <!-- Page operations — edit mode only -->
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}">
+                    <Rectangle Style="{StaticResource Bar}"/>
+
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding RotateCounterClockwiseCommand}" ToolTip="逆时针旋转本页">
+                        <TextBlock Text="&#xE7A7;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding RotateClockwiseCommand}" ToolTip="顺时针旋转本页">
+                        <TextBlock Text="&#xE7A8;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding DeletePageCommand}" ToolTip="删除本页（保存时生效）">
+                        <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding MovePageUpCommand}" ToolTip="上移本页">
+                        <TextBlock Text="&#xE74A;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding MovePageDownCommand}" ToolTip="下移本页">
+                        <TextBlock Text="&#xE74B;" FontFamily="Segoe MDL2 Assets"/>
+                    </Button>
+                </StackPanel>
+
+                <!-- Annotation tools — edit mode only -->
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}">
+                    <Rectangle Style="{StaticResource Bar}"/>
+
+                    <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Select}"
+                             ToolTip="选择 / 点击批注删除">
+                    <TextBlock Text="&#xE8B0;" FontFamily="Segoe MDL2 Assets"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Highlight}"
+                             ToolTip="高亮（自动吸附文字）">
+                    <Rectangle Width="15" Height="15" Fill="#FFD600" Opacity="0.75" RadiusX="2" RadiusY="2"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Underline}"
+                             ToolTip="下划线">
+                    <TextBlock Text="U" FontWeight="Bold" Foreground="#DC2626" TextDecorations="Underline"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=StrikeOut}"
+                             ToolTip="删除线">
+                    <TextBlock Text="S" FontWeight="Bold" Foreground="#DC2626" TextDecorations="Strikethrough"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Rectangle}"
+                             ToolTip="矩形框">
+                    <Rectangle Width="15" Height="12" Stroke="#2563EB" StrokeThickness="1.6"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Ellipse}"
+                             ToolTip="椭圆框">
+                    <Ellipse Width="15" Height="12" Stroke="#059669" StrokeThickness="1.6"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Ink}"
+                             ToolTip="自由绘制">
+                    <TextBlock Text="&#xE70F;" FontFamily="Segoe MDL2 Assets" Foreground="#B91C1C"/>
+                </RadioButton>
+                <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                             IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=Note}"
+                             ToolTip="便签">
+                    <TextBlock Text="&#xE70B;" FontFamily="Segoe MDL2 Assets" Foreground="#B45309"/>
+                </RadioButton>
+
+                    <!-- Unlike the tools above, this one modifies the PDF's own content
+                         instead of overlaying something on top of it. -->
+                    <RadioButton Style="{StaticResource ToolToggle}" GroupName="Tool"
+                                 IsChecked="{Binding CurrentTool, Converter={StaticResource EnumToBool}, ConverterParameter=EditContent}"
+                                 ToolTip="编辑正文：点击页面上的文字直接修改">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8AC;" FontFamily="Segoe MDL2 Assets" Foreground="#1D4ED8"/>
+                            <TextBlock Text="正文" Margin="4,0,0,0" Foreground="#1D4ED8"/>
+                        </StackPanel>
+                    </RadioButton>
+
+                </StackPanel>
+
+                <Rectangle Style="{StaticResource Bar}"/>
+
+                <Button Style="{StaticResource ToolButton}" Command="{Binding ExportImagesCommand}" Content="导出图片"/>
+
+                <!-- Overlays — edit mode only -->
+                <StackPanel Orientation="Horizontal"
+                            Visibility="{Binding IsEditMode, Converter={StaticResource BoolToVis}}">
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding RunOcrCommand}"
+                            ToolTip="识别本页文字，生成可搜索的文字层（扫描件专用）">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                            <TextBlock Text="识别本页" Margin="5,0,0,0"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding RunOcrAllCommand}"
+                            ToolTip="识别全部页面（页数多时较慢）" Content="识别全部"/>
+                    <ToggleButton Style="{StaticResource ToolToggle}"
+                                  IsChecked="{Binding ShowOcrRegions}"
+                                  ToolTip="显示/隐藏识别出的文字区域（绿色框）" Content="显示区域"/>
+
+                    <Rectangle Style="{StaticResource Bar}"/>
+
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding AddWatermarkCommand}" Content="水印"/>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding AddPageNumbersCommand}" Content="页码"/>
+                    <Button Style="{StaticResource ToolButton}" Command="{Binding ClearAnnotationsCommand}" Content="清除批注"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ============================ Status bar ============================ -->
+        <Border DockPanel.Dock="Bottom" Background="White" BorderBrush="#E5E7EB" BorderThickness="0,1,0,0">
+            <Grid Margin="10,5">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Text="{Binding StatusText}" Foreground="#4B5563"
+                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <ProgressBar Width="90" Height="4" IsIndeterminate="True" Margin="0,0,12,0"
+                                 VerticalAlignment="Center"
+                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
+                    <TextBlock Text="第" Foreground="#374151" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                    <TextBox Width="44" Padding="3,1" VerticalContentAlignment="Center"
+                             TextAlignment="Center"
+                             KeyDown="OnPageNumberKeyDown"
+                             ToolTip="输入页码后回车跳转"/>
+                    <TextBlock Text="{Binding PageLabel}" Foreground="#374151"
+                               VerticalAlignment="Center" Margin="600,0,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ============================ Body ============================ -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="236" MinWidth="150"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Sidebar -->
+            <Border Grid.Column="0" Background="White" BorderBrush="#E5E7EB" BorderThickness="0,0,1,0">
+                <TabControl x:Name="SidebarTabs" BorderThickness="0" Background="Transparent">
+
+                    <TabItem Header="缩略图">
+                        <ListBox ItemsSource="{Binding Pages}" BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 HorizontalContentAlignment="Center"
+                                 Background="Transparent">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate DataType="vm:PageViewModel">
+                                    <StackPanel Margin="0,6" Cursor="Hand"
+                                                MouseLeftButtonUp="OnThumbnailClick">
+                                        <Border Background="White" BorderBrush="#D1D5DB" BorderThickness="1"
+                                                HorizontalAlignment="Center">
+                                            <Grid>
+                                                <Image Source="{Binding Thumbnail}" Stretch="Uniform"
+                                                       MaxHeight="150" MaxWidth="160"/>
+                                                <TextBlock Text="已删除" Background="#EF4444" Foreground="White"
+                                                           FontSize="10" Padding="4,1"
+                                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                           Visibility="{Binding Item.IsDeleted, Converter={StaticResource BoolToVis}}"/>
+                                            </Grid>
+                                        </Border>
+                                        <TextBlock Text="{Binding Caption}" HorizontalAlignment="Center"
+                                                   Foreground="#6B7280" Margin="0,3,0,0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </TabItem>
+
+                    <TabItem Header="目录">
+                        <Grid>
+                            <TextBlock Style="{StaticResource Hint}" Text="此文档没有书签目录。"
+                                       Visibility="{Binding HasNoOutline, Converter={StaticResource BoolToVis}}"/>
+                            <TreeView BorderThickness="0" Background="Transparent" Padding="4"
+                                      ItemsSource="{Binding OutlineItems}"
+                                      SelectedItemChanged="OnOutlineSelected"
+                                      Visibility="{Binding HasDocument, Converter={StaticResource BoolToVis}}">
+                                <TreeView.ItemTemplate>
+                                    <HierarchicalDataTemplate DataType="vm:OutlineEntry">
+                                        <TextBlock Text="{Binding Title}" Padding="2,3"/>
+                                    </HierarchicalDataTemplate>
+                                </TreeView.ItemTemplate>
+                            </TreeView>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="搜索">
+                        <DockPanel Margin="8">
+                            <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" Padding="6,4" VerticalContentAlignment="Center"
+                                         Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="OnSearchKeyDown"/>
+                                <Button Grid.Column="1" Content="搜索" Margin="6,0,0,0" Padding="10,4"
+                                        Command="{Binding SearchCommand}"/>
+                            </Grid>
+                            <TextBlock DockPanel.Dock="Top" Foreground="#9CA3AF" Margin="0,0,0,6"
+                                       Text="在整个文档中查找文本"/>
+                            <ListBox ItemsSource="{Binding SearchResults}" BorderThickness="0"
+                                     MouseDoubleClick="OnSearchResultActivate"
+                                     KeyDown="OnSearchResultKeyDown">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,3">
+                                            <TextBlock Text="{Binding Preview}" TextWrapping="Wrap" Foreground="#1F2937"/>
+                                            <TextBlock Foreground="#9CA3AF" FontSize="11">
+                                                <Run Text="第"/><Run Text="{Binding PageIndex}"/><Run Text="页"/>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </TabItem>
+                </TabControl>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Stretch"
+                          Background="#E5E7EB" ResizeBehavior="PreviousAndNext"/>
+
+            <!-- Page canvas -->
+            <Grid Grid.Column="2">
+                <ScrollViewer x:Name="PageScroll" VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Auto" Padding="0,16"
+                              ScrollChanged="OnScrollChanged" Background="#F3F4F6">
+                    <ItemsControl ItemsSource="{Binding Pages}" HorizontalAlignment="Center">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="vm:PageViewModel">
+                                <Grid Margin="0,0,0,14" HorizontalAlignment="Center">
+                                    <Grid Width="{Binding DisplayWidth}" Height="{Binding DisplayHeight}">
+
+                                        <!-- Rendered page -->
+                                        <Border Background="White" BorderBrush="#D1D5DB" BorderThickness="1">
+                                            <Border.Effect>
+                                                <DropShadowEffect BlurRadius="8" ShadowDepth="2"
+                                                                  Opacity="0.16" Color="#000000"/>
+                                            </Border.Effect>
+                                            <Image Source="{Binding Image}" Stretch="Fill"/>
+                                        </Border>
+
+                                        <!-- Pending annotations -->
+                                        <ItemsControl ItemsSource="{Binding Annotations}"
+                                                      ItemTemplateSelector="{StaticResource AnnotSelector}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <Canvas/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+                                                    <Setter Property="Canvas.Left" Value="{Binding Bounds.X}"/>
+                                                    <Setter Property="Canvas.Top" Value="{Binding Bounds.Y}"/>
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+                                        </ItemsControl>
+
+                                        <!-- OCR result overlay. The text layer is invisible by
+                                             design, so without this a successful recognition looks
+                                             like nothing happened at all. -->
+                                        <ItemsControl ItemsSource="{Binding OcrBoxes}"
+                                                      Visibility="{Binding DataContext.ShowOcrRegions,
+                                                                   RelativeSource={RelativeSource AncestorType=Window},
+                                                                   Converter={StaticResource BoolToVis}}"
+                                                      IsHitTestVisible="False">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Rectangle Width="{Binding Width}" Height="{Binding Height}"
+                                                               Fill="#2222C55E" Stroke="#55C55E" StrokeThickness="1"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+                                                    <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                                    <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+                                        </ItemsControl>
+
+                                        <!-- Outline over every editable text region while the
+                                             content-edit tool is armed, so it is obvious what can
+                                             be clicked — the way mainstream editors show it. -->
+                                        <ItemsControl ItemsSource="{Binding EditableBoxes}"
+                                                      Visibility="{Binding DataContext.ShowEditableBoxes,
+                                                                   RelativeSource={RelativeSource AncestorType=Window},
+                                                                   Converter={StaticResource BoolToVis}}"
+                                                      IsHitTestVisible="False">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Rectangle Width="{Binding Width}" Height="{Binding Height}"
+                                                               Fill="#0F3B82F6" Stroke="#803B82F6" StrokeThickness="1"
+                                                               StrokeDashArray="3 2"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                            <ItemsControl.ItemContainerStyle>
+                                                <Style TargetType="ContentPresenter">
+                                                    <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                                                    <Setter Property="Canvas.Top" Value="{Binding Y}"/>
+                                                </Style>
+                                            </ItemsControl.ItemContainerStyle>
+                                        </ItemsControl>
+
+                                        <!-- Inline editor: sits exactly on the text being changed,
+                                             so the edit happens in place rather than in a side panel. -->
+                                        <Canvas Visibility="{Binding HasSelection, Converter={StaticResource BoolToVis}}">
+                                            <Border Canvas.Left="{Binding SelectionBounds.Value.X}"
+                                                    Canvas.Top="{Binding SelectionBounds.Value.Y}"
+                                                    MinWidth="220" Padding="4"
+                                                    Background="White" BorderBrush="#2563EB"
+                                                    BorderThickness="2" CornerRadius="3">
+                                                <Border.Effect>
+                                                    <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.3"/>
+                                                </Border.Effect>
+                                                <StackPanel>
+                                                    <TextBox x:Name="InlineEditor"
+                                                             Text="{Binding DataContext.ContentEditText,
+                                                                            RelativeSource={RelativeSource AncestorType=Window},
+                                                                            UpdateSourceTrigger=PropertyChanged}"
+                                                             IsEnabled="{Binding DataContext.CanEditSelection,
+                                                                                 RelativeSource={RelativeSource AncestorType=Window}}"
+                                                             Padding="3,2" FontSize="14" BorderThickness="0"
+                                                             KeyDown="OnInlineEditorKeyDown"
+                                                             IsVisibleChanged="OnInlineEditorVisibleChanged"/>
+                                                    <TextBlock Text="Enter 应用 · Esc 取消"
+                                                               Foreground="#9CA3AF" FontSize="10" Margin="3,2,0,0"/>
+                                                    <TextBlock Text="{Binding DataContext.ContentEditHint,
+                                                                              RelativeSource={RelativeSource AncestorType=Window}}"
+                                                               Foreground="#B45309" FontSize="11" TextWrapping="Wrap"
+                                                               MaxWidth="340" Margin="3,2,0,0"
+                                                               Visibility="{Binding DataContext.HasContentEditHint,
+                                                                                    RelativeSource={RelativeSource AncestorType=Window},
+                                                                                    Converter={StaticResource BoolToVis}}"/>
+                                                </StackPanel>
+                                            </Border>
+                                        </Canvas>
+
+                                        <!-- Busy overlay -->
+                                        <Border Background="#B0FFFFFF"
+                                                Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="渲染中…" Foreground="#6B7280"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+
+                                        <!-- Pointer surface: must be last so it receives the events.
+                                             The crosshair only appears in edit mode; in read mode
+                                             the page behaves like an ordinary scrollable surface. -->
+                                        <Canvas Background="Transparent"
+                                                MouseLeftButtonDown="OnPageMouseDown"
+                                                MouseMove="OnPageMouseMove"
+                                                MouseLeftButtonUp="OnPageMouseUp"
+                                                MouseRightButtonUp="OnPageRightClick">
+                                            <Canvas.Style>
+                                                <Style TargetType="Canvas">
+                                                    <Setter Property="Cursor" Value="Arrow"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Value="True"
+                                                                     Binding="{Binding DataContext.IsEditMode,
+                                                                               RelativeSource={RelativeSource AncestorType=Window}}">
+                                                            <Setter Property="Cursor" Value="Cross"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Canvas.Style>
+                                        </Canvas>
+                                    </Grid>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- Empty state -->
+                <Border Background="#F3F4F6" Visibility="{Binding HasNoDocument, Converter={StaticResource BoolToVis}}">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="52"
+                                   Foreground="#D1D5DB" HorizontalAlignment="Center"/>
+                        <TextBlock Text="打开或拖入一个 PDF 文件" Foreground="#9CA3AF"
+                                   FontSize="15" Margin="0,14,0,0" HorizontalAlignment="Center"/>
+                        <Button Content="选择文件…" Command="{Binding OpenCommand}" Margin="0,18,0,0"
+                                Padding="18,8" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </DockPanel>
+</Window>
