@@ -158,17 +158,32 @@ public sealed class PageViewModel : ObservableObject
     }
 
     private Rect? _selectionBounds;
+
     /// <summary>Outline drawn around the page object currently picked for content editing.</summary>
     public Rect? SelectionBounds
     {
         get => _selectionBounds;
         set
         {
-            if (SetField(ref _selectionBounds, value)) OnPropertyChanged(nameof(HasSelection));
+            if (!SetField(ref _selectionBounds, value)) return;
+            OnPropertyChanged(nameof(HasSelection));
+            OnPropertyChanged(nameof(SelectionLeft));
+            OnPropertyChanged(nameof(SelectionTop));
+            OnPropertyChanged(nameof(SelectionWidth));
         }
     }
 
     public bool HasSelection => _selectionBounds is not null;
+
+    // The inline editor positions itself with Canvas.Left/Top. Binding those to
+    // `SelectionBounds.Value.X` does not work: the source is null until something is selected,
+    // the path resolves to nothing, and the editor ends up parked at the page's origin.
+    // Plain non-nullable doubles sidestep the nullable-path problem entirely.
+    public double SelectionLeft => _selectionBounds?.X ?? 0;
+    public double SelectionTop => _selectionBounds?.Y ?? 0;
+
+    /// <summary>Width of the edited region, so the field covers the text it stands in for.</summary>
+    public double SelectionWidth => _selectionBounds?.Width ?? 0;
 
     private RenderState _state = RenderState.Pending;
     public RenderState State

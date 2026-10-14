@@ -518,34 +518,27 @@
                                         <!-- Inline editor: sits exactly on the text being changed,
                                              so the edit happens in place rather than in a side panel. -->
                                         <Canvas Visibility="{Binding HasSelection, Converter={StaticResource BoolToVis}}">
-                                            <Border Canvas.Left="{Binding SelectionBounds.Value.X}"
-                                                    Canvas.Top="{Binding SelectionBounds.Value.Y}"
-                                                    MinWidth="220" Padding="4"
+                                            <!-- Sized to the text it replaces and drawn flat:
+                                                 an in-place edit field, not a floating panel.
+                                                 No shadow, no minimum width, no chrome. -->
+                                            <Border Canvas.Left="{Binding SelectionLeft}"
+                                                    Canvas.Top="{Binding SelectionTop}"
+                                                    Width="{Binding SelectionWidth}"
+                                                    MinWidth="60"
                                                     Background="White" BorderBrush="#2563EB"
-                                                    BorderThickness="2" CornerRadius="3">
-                                                <Border.Effect>
-                                                    <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.3"/>
-                                                </Border.Effect>
-                                                <StackPanel>
-                                                    <TextBox x:Name="InlineEditor"
-                                                             Text="{Binding DataContext.ContentEditText,
-                                                                            RelativeSource={RelativeSource AncestorType=Window},
-                                                                            UpdateSourceTrigger=PropertyChanged}"
-                                                             IsEnabled="{Binding DataContext.CanEditSelection,
-                                                                                 RelativeSource={RelativeSource AncestorType=Window}}"
-                                                             Padding="3,2" FontSize="14" BorderThickness="0"
-                                                             KeyDown="OnInlineEditorKeyDown"
-                                                             IsVisibleChanged="OnInlineEditorVisibleChanged"/>
-                                                    <TextBlock Text="Enter 应用 · Esc 取消"
-                                                               Foreground="#9CA3AF" FontSize="10" Margin="3,2,0,0"/>
-                                                    <TextBlock Text="{Binding DataContext.ContentEditHint,
-                                                                              RelativeSource={RelativeSource AncestorType=Window}}"
-                                                               Foreground="#B45309" FontSize="11" TextWrapping="Wrap"
-                                                               MaxWidth="340" Margin="3,2,0,0"
-                                                               Visibility="{Binding DataContext.HasContentEditHint,
-                                                                                    RelativeSource={RelativeSource AncestorType=Window},
-                                                                                    Converter={StaticResource BoolToVis}}"/>
-                                                </StackPanel>
+                                                    BorderThickness="1.5" CornerRadius="1">
+                                                <TextBox x:Name="InlineEditor"
+                                                         Text="{Binding DataContext.ContentEditText,
+                                                                        RelativeSource={RelativeSource AncestorType=Window},
+                                                                        UpdateSourceTrigger=PropertyChanged}"
+                                                         IsEnabled="{Binding DataContext.CanEditSelection,
+                                                                             RelativeSource={RelativeSource AncestorType=Window}}"
+                                                         Padding="2,0" BorderThickness="0"
+                                                         Background="Transparent"
+                                                         VerticalContentAlignment="Center"
+                                                         KeyDown="OnInlineEditorKeyDown"
+                                                         IsVisibleChanged="OnInlineEditorVisibleChanged"
+                                                         ToolTip="Enter 应用 · Esc 取消"/>
                                             </Border>
                                         </Canvas>
 
