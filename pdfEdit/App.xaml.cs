@@ -34,7 +34,11 @@ public partial class App : Application
             return;
         }
 
-        var window = new Views.MainWindow();
+        // `--noconfirm` launches with the unsaved-changes prompt disabled, for scripted runs
+        // that open and close the app repeatedly.
+        var noConfirm = e.Args.Any(a => string.Equals(a, "--noconfirm", StringComparison.OrdinalIgnoreCase));
+
+        var window = new Views.MainWindow(noConfirm);
         window.Show();
 
         // Support `PdfEdit.exe some.pdf`, plus shell "Open with" and dragging a file onto the exe.
@@ -104,7 +108,10 @@ public partial class App : Application
 
         try
         {
-            var window = new Views.MainWindow();
+            // Force-close: the smoke test deliberately dirties the document, and the
+            // unsaved-changes prompt would block on a dialog nobody can dismiss headlessly.
+            // That was the real cause of the intermittent 124 timeouts.
+            var window = new Views.MainWindow(forceClose: true);
             window.Show();
             log.AppendLine("窗口已创建并显示");
 

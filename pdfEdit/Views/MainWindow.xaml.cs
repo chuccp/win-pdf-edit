@@ -14,14 +14,26 @@ public partial class MainWindow : Window
 
     private readonly MainViewModel _viewModel = new();
 
+    /// <summary>
+    /// Set by the hidden force-close gesture to skip the unsaved-changes prompt.
+    ///
+    /// The prompt exists to stop a user losing work; it is pure friction when the window is
+    /// being opened and closed repeatedly during development. Deliberately undocumented and
+    /// unreachable by accident: Ctrl+Shift+W is not a gesture anyone hits while editing.
+    /// </summary>
+    private bool _forceClose;
+
     private readonly List<Point> _strokePoints = [];
     private PageViewModel? _dragPage;
     private Canvas? _dragCanvas;
     private Rectangle? _rubberBand;
     private bool _isDragging;
 
-    public MainWindow()
+    public MainWindow() : this(forceClose: false) { }
+
+    public MainWindow(bool forceClose)
     {
+        _forceClose = forceClose;
         InitializeComponent();
 
         DataContext = _viewModel;
@@ -459,6 +471,14 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
 
+            case Key.W when ctrl && (Keyboard.Modifiers & ModifierKeys.Shift) != 0:
+                // Hidden developer escape hatch: close now, discarding unsaved edits, without
+                // the confirmation the normal close path shows.
+                _forceClose = true;
+                Close();
+                e.Handled = true;
+                break;
+
             case Key.Escape:
                 _viewModel.CurrentTool = EditorTool.Select;
                 e.Handled = true;
@@ -474,6 +494,12 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (_forceClose)
+        {
+            _viewModel.Dispose();
+            return;
+        }
+
         if (!_viewModel.IsDirty)
         {
             _viewModel.Dispose();
