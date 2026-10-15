@@ -561,6 +561,148 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // ------------------------------------------------------------------ annotation editing
+
+    private AnnotationSpec? _selectedAnnotation;
+    /// <summary>
+    /// The annotation currently picked for editing. Selecting one exposes its colour and text,
+    /// which previously could only be changed by deleting and redrawing it.
+    /// </summary>
+    public AnnotationSpec? SelectedAnnotation
+    {
+        get => _selectedAnnotation;
+        set
+        {
+            if (!SetField(ref _selectedAnnotation, value)) return;
+
+            OnPropertyChanged(nameof(HasAnnotationSelection));
+            OnPropertyChanged(nameof(AnnotationColour));
+            OnPropertyChanged(nameof(AnnotationContent));
+            OnPropertyChanged(nameof(HasAnnotationContent));
+            DeleteAnnotationCommand.RaiseCanExecuteChanged();
+            ShowAnnotationOnPage();
+        }
+    }
+
+    public bool HasAnnotationSelection => _selectedAnnotation is not null;
+
+    /// <summary>Notes carry prose; highlight and shape markup usually do not.</summary>
+    public bool HasAnnotationContent =>
+        _selectedAnnotation?.Kind is AnnotationKind.Note or AnnotationKind.FreeText;
+
+    public string AnnotationColour
+    {
+        get => _selectedAnnotation is { } a ? $"#{a.R:X2}{a.G:X2}{a.B:X2}" : "#FFD600";
+        set
+        {
+            if (_selectedAnnotation is not { } spec) return;
+
+            var previous = (spec.R, spec.G, spec.B);
+            if (!TryParse(value, out var r, out var g, out var b)) return;
+            if (previous == (r, g, b)) return;
+
+            spec.R = r; spec.G = g; spec.B = b;
+
+            PushEdit("修改批注颜色",
+                undo: () => { (spec.R, spec.G, spec.B) = previous; RedrawAnnotations(spec); },
+                redo: () => { spec.R = r; spec.G = g; spec.B = b; RedrawAnnotations(spec); });
+
+            RedrawAnnotations(spec);
+            OnPropertyChanged(nameof(AnnotationColour));
+        }
+    }
+
+    public string AnnotationContent
+    {
+        get => _selectedAnnotation?.Contents ?? string.Empty;
+        set
+        {
+            if (_selectedAnnotation is not { } spec) return;
+
+            var previous = spec.Contents;
+            if (previous == value) return;
+
+            spec.Contents = value;
+
+            PushEdit("修改批注内容",
+                undo: () => { spec.Contents = previous; OnPropertyChanged(nameof(AnnotationContent)); },
+                redo: () => { spec.Contents = value; OnPropertyChanged(nameof(AnnotationContent)); });
+        }
+    }
+
+    /// <summary>Re-renders the page an annotation lives on after its appearance changes.</summary>
+    private void RedrawAnnotations(AnnotationSpec spec)
+    {
+        var owner = Pages.FirstOrDefault(p => p.Item == spec.Page);
+        if (owner is not null) owner.RebuildAnnotations(AnnotationsFor(owner));
+
+        StatusText = "已修改批注。保存后写入 PDF。";
+    }
+
+    /// <summary>Draws the selection outline around the annotation being edited.</summary>
+    private void ShowAnnotationOnPage()
+    {
+        foreach (var page in Pages) page.SelectionBounds = null;
+        if (_selectedAnnotation is not { } spec) return;
+
+        var owner = Pages.FirstOrDefault(p => p.Item == spec.Page);
+        if (owner is null) return;
+
+        var zoom = Zoom;
+        owner.SelectionBounds = new Rect(
+            spec.Left * zoom, spec.Top * zoom,
+            Math.Max(1, (spec.Right - spec.Left) * zoom),
+            Math.Max(1, (spec.Bottom - spec.Top) * zoom));
+    }
+
+    private static bool TryParse(string hex, out byte r, out byte g, out byte b)
+    {
+        r = g = b = 0;
+        try
+        {
+            var colour = (System.Windows.Media.Color)System.Windows.Media.ColorConverter
+                .ConvertFromString(hex);
+            r = colour.R; g = colour.G; b = colour.B;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Picks the annotation under a point for editing. Null clears the selection.</summary>
+    public bool SelectAnnotationAt(PageViewModel page, Point pagePoint)
+    {
+        var hit = _model.Annotations
+            .Where(a => a.Page == page.Item)
+            .Where(a => pagePoint.X >= a.Left && pagePoint.X <= a.Right &&
+                        pagePoint.Y >= a.Top && pagePoint.Y <= a.Bottom)
+            .OrderBy(a => (a.Right - a.Left) * (a.Bottom - a.Top))
+            .FirstOrDefault();
+
+        SelectedAnnotation = hit;
+
+        if (hit is not null)
+            StatusText = $"已选中{DescribeTool(hit.Kind)}批注，可改颜色" +
+                         (HasAnnotationContent ? "与内容" : "") + "。右键可删除。";
+
+        return hit is not null;
+    }
+
+    private static string DescribeTool(AnnotationKind kind) => kind switch
+    {
+        AnnotationKind.Highlight => "高亮",
+        AnnotationKind.Underline => "下划线",
+        AnnotationKind.StrikeOut => "删除线",
+        AnnotationKind.Squiggly => "波浪线",
+        AnnotationKind.Rectangle => "矩形",
+        AnnotationKind.Ellipse => "椭圆",
+        AnnotationKind.Ink => "手绘",
+        AnnotationKind.Note => "便签",
+        _ => "文字",
+    };
+
     // ------------------------------------------------------------------ content editing
 
     private PageObjectInfo? _selectedObject;

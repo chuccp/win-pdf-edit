@@ -36,6 +36,19 @@ public sealed class InverseBoolConverter : IValueConverter
         => value is not true;
 }
 
+/// <summary>Swatch colour for an annotation, so the toolbar shows what is picked.</summary>
+public sealed class SpecToBrushConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is Models.AnnotationSpec spec
+            ? new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(spec.R, spec.G, spec.B))
+            : System.Windows.Media.Brushes.Transparent;
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
 /// <summary>Picks the shape template matching an annotation's geometry.</summary>
 public sealed class AnnotationTemplateSelector : DataTemplateSelector
 {

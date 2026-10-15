@@ -107,12 +107,15 @@ public partial class MainWindow : Window
 
         if (_viewModel.CurrentTool == EditorTool.Select)
         {
-            // There is no undo yet, so a stray left-click must not destroy work. Selecting only
-            // reports what is under the pointer; right-click is the deliberate delete gesture.
-            var found = FindAnnotationAt(page, position);
-            _viewModel.StatusText = found?.Source is null
-                ? "此处没有批注（右键可删除批注）。"
-                : $"此处有一条{Describe(found.Source.Kind)}，右键点击可删除。";
+            // Picks the annotation for editing. Deleting stays on the right-click menu, so a
+            // stray click can never destroy work.
+            if (!_viewModel.SelectAnnotationAt(page, ToPageSpace(position)) && _viewModel.HasSelection)
+            {
+                // Clicking away from any annotation drops both selections.
+                _viewModel.ClearObjectSelection();
+                _viewModel.SelectedAnnotation = null;
+            }
+
             return;
         }
 
