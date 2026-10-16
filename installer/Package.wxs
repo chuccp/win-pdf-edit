@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSI definition for the published self-contained output (publish/).
+
+  Build from the repo root (forward slashes: bash eats backslashes):
+    wix build installer/Package.wxs -arch x64 -o dist/PdfEdit-<版本>-win-x64.msi \
+      -d PublishDir=C:/path/to/repo/publish
+
+  UpgradeCode is fixed forever — never regenerate it, or upgrades install side-by-side.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <Package Name="PDF 阅读编辑器" Manufacturer="chuccp" Version="1.0.0"
+           UpgradeCode="7E209C04-2D72-4211-AE07-D7531004F3BA"
+           Scope="perMachine">
+
+    <MajorUpgrade DowngradeErrorMessage="已安装更新版本的 PDF 阅读编辑器，请先卸载旧版本。" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- The app itself: the whole publish dir harvested as one unit. PDBs are removed
+         from publish/ before building — developer artefacts don't ship in the installer. -->
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="PdfEdit">
+        <Files Include="$(var.PublishDir)\**" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start menu entry. Registry key is the component key path; RemoveFolder cleans
+         up the (otherwise empty) program folder on uninstall. The shortcut target is a
+         formatted path, since harvesting assigns the exe an auto-generated id. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="PDF 阅读编辑器">
+        <Component Id="StartMenuShortcut" Guid="*">
+          <Shortcut Id="StartMenuShortcutLink" Name="PDF 阅读编辑器"
+                    Target="[INSTALLFOLDER]PdfEdit.exe" WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+          <RegistryValue Root="HKLM" Key="Software\chuccp\PdfEdit"
+                         Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Desktop entry, same pattern. -->
+    <StandardDirectory Id="DesktopFolder">
+      <Component Id="DesktopShortcut" Guid="*">
+        <Shortcut Id="DesktopShortcutLink" Name="PDF 阅读编辑器"
+                  Target="[INSTALLFOLDER]PdfEdit.exe" WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKLM" Key="Software\chuccp\PdfEdit"
+                       Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+  </Package>
+</Wix>

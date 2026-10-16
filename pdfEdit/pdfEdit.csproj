@@ -15,6 +15,12 @@
         <AssemblyName>PdfEdit</AssemblyName>
         <RootNamespace>PdfEdit</RootNamespace>
         <ApplicationManifest>app.manifest</ApplicationManifest>
+        <!-- Version metadata for the exe and the MSI built from the published output. -->
+        <Version>1.0.0</Version>
+        <Product>PDF 阅读编辑器</Product>
+        <AssemblyTitle>PDF 阅读编辑器</AssemblyTitle>
+        <Company>chuccp</Company>
+        <Description>Windows 桌面 PDF 阅读与编辑工具</Description>
         <!--
           PDFium ships its native binaries under runtimes/<rid>/native/. The package's own
           .targets file lives in build/native/, which MSBuild only imports for C++ projects,
