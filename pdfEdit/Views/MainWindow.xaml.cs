@@ -95,9 +95,18 @@ public partial class MainWindow : Window
         var position = e.GetPosition(canvas);
 
         // A double-click goes straight into editing whatever text sits under the pointer,
-        // whatever tool happens to be armed.
+        // whatever tool happens to be armed — unless the pointer is on a note, whose contents
+        // are what a double-click should edit.
         if (e.ClickCount == 2)
         {
+            if (FindAnnotationAt(page, position)?.Source is { } note &&
+                note.Kind == Models.AnnotationKind.Note)
+            {
+                EditNoteContents(note);
+                e.Handled = true;
+                return;
+            }
+
             _viewModel.CurrentTool = EditorTool.EditContent;
             _viewModel.SelectObjectAt(page, ToPageSpace(position));
             e.Handled = true;
@@ -186,11 +195,107 @@ public partial class MainWindow : Window
         }
 
         if (_strokePoints.Count > 0 && _viewModel.CurrentTool != EditorTool.Select)
-            _viewModel.AddAnnotation(_dragPage, _viewModel.CurrentTool, _strokePoints);
+        {
+            // A note is useless without its text, so the prompt comes first: cancelling
+            // leaves no annotation behind, and the text rides along in the same undo step.
+            string? contents = null;
+            if (_viewModel.CurrentTool == EditorTool.Note)
+            {
+                contents = PromptForNote(null);
+                if (contents is null)
+                {
+                    _strokePoints.Clear();
+                    _dragPage = null;
+                    _dragCanvas = null;
+                    _viewModel.StatusText = "已取消放置便签。";
+                    return;
+                }
+            }
+
+            _viewModel.AddAnnotation(_dragPage, _viewModel.CurrentTool, _strokePoints, contents);
+        }
 
         _strokePoints.Clear();
         _dragPage = null;
         _dragCanvas = null;
+    }
+
+    /// <summary>Opens the note content editor; empty input is allowed, cancel is not.</summary>
+    private void EditNoteContents(Models.AnnotationSpec note)
+    {
+        var text = PromptForNote(note.Contents);
+        if (text is null) return;
+
+        _viewModel.SetAnnotationContents(note, text);
+    }
+
+    /// <summary>
+    /// Minimal text prompt for note contents. Null when cancelled.
+    ///
+    /// Deliberately code-built like the password prompt in the view model: one small dialog
+    /// does not warrant a XAML file and a view model of its own.
+    /// </summary>
+    private static string? PromptForNote(string? initial)
+    {
+        var window = new Window
+        {
+            Title = "便签内容",
+            Width = 420, Height = 280,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = Application.Current?.MainWindow,
+            ResizeMode = ResizeMode.NoResize,
+        };
+
+        var box = new TextBox
+        {
+            Text = initial ?? string.Empty,
+            AcceptsReturn = true,
+            AcceptsTab = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Padding = new Thickness(6, 4, 6, 4),
+            Margin = new Thickness(0, 0, 0, 12),
+            MinHeight = 140,
+            VerticalContentAlignment = VerticalAlignment.Top,
+        };
+
+        var ok = new Button
+        {
+            Content = "保存",
+            IsDefault = true,
+            MinWidth = 84,
+            Padding = new Thickness(18, 5, 18, 5),
+        };
+        var cancel = new Button
+        {
+            Content = "取消",
+            IsCancel = true,
+            MinWidth = 84,
+            Padding = new Thickness(18, 5, 18, 5),
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+
+        string? result = null;
+        ok.Click += (_, _) => { result = box.Text; window.DialogResult = true; };
+
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+
+        var panel = new StackPanel { Margin = new Thickness(16) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "便签内容（保存后写入 PDF 批注，Acrobat 等阅读器可直接查看）：",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 10),
+        });
+        panel.Children.Add(box);
+        panel.Children.Add(buttons);
+
+        window.Content = panel;
+        window.Loaded += (_, _) => box.Focus();
+
+        return window.ShowDialog() == true ? result : null;
     }
 
     /// <summary>
@@ -255,6 +360,13 @@ public partial class MainWindow : Window
         var annotation = FindAnnotationAt(page, devicePoint);
         if (annotation?.Source is not null)
         {
+            if (annotation.Source.Kind == Models.AnnotationKind.Note)
+            {
+                var edit = new MenuItem { Header = "编辑便签内容" };
+                edit.Click += (_, _) => EditNoteContents(annotation.Source);
+                menu.Items.Add(edit);
+            }
+
             var delete = new MenuItem { Header = $"删除{Describe(annotation.Source.Kind)}批注" };
             delete.Click += (_, _) =>
                 _viewModel.DeleteAnnotationCommand.Execute(annotation.Source);
@@ -365,6 +477,30 @@ public partial class MainWindow : Window
         if (PageOf(sender) is { } page) ScrollToPage(page);
     }
 
+    /// <summary>
+    /// A sidebar row appeared — request its thumbnail. Fires only when the virtualising
+    /// panel realises the row, which is what makes thumbnail work proportional to what
+    /// is actually on screen rather than to document length.
+    /// </summary>
+    private void OnThumbnailRowLoaded(object sender, RoutedEventArgs e)
+        => RequestThumbnail(sender);
+
+    /// <summary>Row recycling: a realised row can be re-bound to a different page.</summary>
+    private void OnThumbnailRowDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
+        => RequestThumbnail(sender);
+
+    private void RequestThumbnail(object sender)
+    {
+        if (PageOf(sender) is { } page) _viewModel.EnsureThumbnail(page);
+    }
+
+    /// <summary>Jumping the edit history to the clicked state.</summary>
+    private void OnHistoryRowClick(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as ListBox)?.SelectedItem is MainViewModel.HistoryRow row)
+            _viewModel.JumpToHistory(row);
+    }
+
     private void OnOutlineSelected(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (e.NewValue is Models.OutlineEntry entry)
@@ -421,6 +557,11 @@ public partial class MainWindow : Window
 
             case Key.S when ctrl:
                 _viewModel.SaveCommand.Execute(null);
+                e.Handled = true;
+                break;
+
+            case Key.P when ctrl:
+                _viewModel.PrintCommand.Execute(null);
                 e.Handled = true;
                 break;
 

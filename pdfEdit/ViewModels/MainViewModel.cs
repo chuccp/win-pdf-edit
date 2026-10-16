@@ -219,6 +219,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand AddWatermarkCommand { get; }
     public RelayCommand AddPageNumbersCommand { get; }
     public RelayCommand ExportImagesCommand { get; }
+    public RelayCommand PrintCommand { get; }
     public RelayCommand<AnnotationSpec> DeleteAnnotationCommand { get; }
     public RelayCommand UndoCommand { get; }
     public RelayCommand<string> OpenRecentCommand { get; }
@@ -246,6 +247,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SearchCommand = new RelayCommand(RunSearch, () => HasDocument && SearchText.Length > 0);
         ClearSearchCommand = new RelayCommand(() =>
         {
+            _searchCts?.Cancel();
+            IsBusy = false;
             SearchResults.Clear();
             RefreshSearchHighlights();
             StatusText = "已清除搜索结果。";
@@ -263,6 +266,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         AddWatermarkCommand = new RelayCommand(AddWatermark, () => HasDocument);
         AddPageNumbersCommand = new RelayCommand(AddPageNumbers, () => HasDocument);
         ExportImagesCommand = new RelayCommand(ExportImages, () => HasDocument);
+        PrintCommand = new RelayCommand(Print, () => HasDocument);
         DeleteAnnotationCommand = new RelayCommand<AnnotationSpec>(RemoveAnnotation);
         OpenRecentCommand = new RelayCommand<string>(p => { if (p is not null) OpenFile(p); });
         UndoCommand = new RelayCommand(Undo, () => _undoStack.Count > 0);
@@ -345,6 +349,60 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(CanRedo));
         OnPropertyChanged(nameof(UndoLabel));
         OnPropertyChanged(nameof(RedoLabel));
+        RefreshHistory();
+    }
+
+    // ------------------------------------------------------------------ undo history panel
+
+    /// <summary>One row of the history panel: an applied edit, the cursor, or a redoable edit.</summary>
+    public sealed record HistoryRow(string Label, bool Applied, bool IsCursor);
+
+    /// <summary>
+    /// The whole edit history, oldest first, with a cursor row marking the present. Rows above
+    /// the cursor are applied, rows below are undone (redoable). The stacks already carry a
+    /// label per edit, so this is a pure view of them.
+    /// </summary>
+    public ObservableCollection<HistoryRow> History { get; } = [];
+
+    private void RefreshHistory()
+    {
+        History.Clear();
+
+        foreach (var edit in _undoStack.Reverse())
+            History.Add(new HistoryRow(edit.Label, Applied: true, IsCursor: false));
+
+        History.Add(new HistoryRow("— 当前 —", Applied: true, IsCursor: true));
+
+        // The redo stack's top IS the next edit in timeline order (the most recently undone),
+        // so enumerating it directly continues the timeline below the cursor.
+        foreach (var edit in _redoStack)
+            History.Add(new HistoryRow(edit.Label, Applied: false, IsCursor: false));
+    }
+
+    /// <summary>
+    /// Jumps to one history row by repeatedly undoing or redoing until that row is the last
+    /// applied edit. Row lookup is by reference so duplicate labels ("添加便签" twice) each
+    /// address their own entry.
+    /// </summary>
+    public void JumpToHistory(HistoryRow row)
+    {
+        var index = -1;
+        for (var i = 0; i < History.Count; i++)
+        {
+            if (ReferenceEquals(History[i], row)) { index = i; break; }
+        }
+        if (index < 0) return;
+
+        var applied = _undoStack.Count;
+
+        if (index < applied)
+        {
+            for (var i = 0; i < applied - 1 - index; i++) Undo();
+        }
+        else if (index > applied)
+        {
+            for (var i = 0; i < index - applied; i++) Redo();
+        }
     }
 
     private void ClearHistory()
@@ -617,17 +675,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         get => _selectedAnnotation?.Contents ?? string.Empty;
         set
         {
-            if (_selectedAnnotation is not { } spec) return;
-
-            var previous = spec.Contents;
-            if (previous == value) return;
-
-            spec.Contents = value;
-
-            PushEdit("修改批注内容",
-                undo: () => { spec.Contents = previous; OnPropertyChanged(nameof(AnnotationContent)); },
-                redo: () => { spec.Contents = value; OnPropertyChanged(nameof(AnnotationContent)); });
+            if (_selectedAnnotation is { } spec) SetAnnotationContents(spec, value);
         }
+    }
+
+    /// <summary>
+    /// Rewrites an annotation's note text as one undoable step. Used by the toolbar field and
+    /// by the note input prompt, so both paths share the same history semantics.
+    /// </summary>
+    public void SetAnnotationContents(AnnotationSpec spec, string? text)
+    {
+        var previous = spec.Contents;
+        if (previous == text) return;
+
+        spec.Contents = text;
+
+        PushEdit("修改批注内容",
+            undo: () => { spec.Contents = previous; RedrawAnnotations(spec); },
+            redo: () => { spec.Contents = text; RedrawAnnotations(spec); });
+
+        RedrawAnnotations(spec);
     }
 
     /// <summary>Re-renders the page an annotation lives on after its appearance changes.</summary>
@@ -635,6 +702,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var owner = Pages.FirstOrDefault(p => p.Item == spec.Page);
         if (owner is not null) owner.RebuildAnnotations(AnnotationsFor(owner));
+
+        // The toolbar field mirrors the selection's text; an undo of a content edit changes it.
+        if (_selectedAnnotation == spec) OnPropertyChanged(nameof(AnnotationContent));
 
         StatusText = "已修改批注。保存后写入 PDF。";
     }
@@ -1036,6 +1106,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Chooses a substitute font for a redrawn word by matching the original glyphs' stroke
+    /// weight, instead of always drawing 黑体 over thin body text. The original ink is still
+    /// in the page raster in both call paths — a scanned word's pixels, or an in-place edit's
+    /// object which is only hidden at export — so the crop is taken from there.
+    /// </summary>
+    private static string MatchSubstituteFont(PageViewModel page, TextRect box, string sample)
+    {
+        if (page.Image is not { } image) return PdfExportService.TextLayerFont;
+
+        var zoom = page.Zoom <= 0 ? 1 : page.Zoom;
+
+        var left = (int)Math.Round(box.Left * zoom);
+        var top = (int)Math.Round(box.Top * zoom);
+        var width = (int)Math.Round((box.Right - box.Left) * zoom);
+        var height = (int)Math.Round((box.Bottom - box.Top) * zoom);
+
+        return FontMatcher.Match(image, new Int32Rect(left, top, width, height), sample);
+    }
+
+    /// <summary>
     /// Lifts a background patch from a blank area of the same page to cover a scanned word.
     ///
     /// A flat colour sampled near the text leaves a visible rectangle wherever the page is not
@@ -1176,7 +1266,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 Bounds = ocrWord.Bounds,
                 Text = ContentEditText,
                 FontSize = Math.Max(6, ocrWord.Bounds.Bottom - ocrWord.Bounds.Top) * 0.88,
-                FontFamily = PdfExportService.TextLayerFont,
+                FontFamily = MatchSubstituteFont(page, ocrWord.Bounds, ContentEditText),
                 RedactBackground = true,
                 BackgroundPatch = patch,
                 R = 20, G = 20, B = 20,
@@ -1225,14 +1315,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                         Bounds = target.Bounds,
                         Text = ContentEditText,
                         FontSize = target.FontSize > 1 ? target.FontSize : 12,
-                        FontFamily = PdfExportService.TextLayerFont,
+                        FontFamily = MatchSubstituteFont(page, target.Bounds, ContentEditText),
                         HideObjectPath = target.Path,
                     };
 
                     AddReplacement(replacement, $"改写「{target.Text}」");
                     ClearObjectSelection();
                     StatusText = $"原字体「{target.FontName}」缺少新字符的字形，" +
-                                 "已改为保存时用替代字体重绘。";
+                                 $"已改为保存时用「{replacement.FontFamily}」重绘。";
                     break;
 
                 case TextEditOutcome.NotATextObject:
@@ -1304,6 +1394,47 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch
         {
             // A stale thumbnail is not worth surfacing.
+        }
+    }
+
+    private readonly HashSet<PageViewModel> _thumbRendering = [];
+
+    /// <summary>
+    /// Renders a page's thumbnail the first time its sidebar row is realised. The sidebar
+    /// virtualises, so this fires when the row scrolls into view — which is what keeps opening
+    /// a several-hundred-page scan from rasterising every page before the first one shows.
+    /// </summary>
+    public void EnsureThumbnail(PageViewModel page)
+    {
+        if (page.Thumbnail is not null || !_thumbRendering.Add(page)) return;
+        _ = RenderThumbnailAsync(page);
+    }
+
+    /// <summary>
+    /// Queued from the UI thread and resumed on it, so <see cref="_thumbRendering"/> never sees
+    /// a cross-thread mutation.
+    /// </summary>
+    private async Task RenderThumbnailAsync(PageViewModel page)
+    {
+        try
+        {
+            if (_renderer is null) return;
+
+            const double target = 110.0;
+            var scale = target / Math.Max(1, page.WidthInPoints);
+            var renderer = _renderer;
+            var bitmap = await Task.Run(() =>
+                renderer.Get(page.SourceIndex, scale, page.Item.Rotation, true));
+
+            page.Thumbnail = bitmap;
+        }
+        catch
+        {
+            // A thumbnail failing is not worth interrupting the user over.
+        }
+        finally
+        {
+            _thumbRendering.Remove(page);
         }
     }
 
@@ -1518,6 +1649,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SearchResults.Clear();
         OutlineItems.Clear();
 
+        // Any search still running belongs to the document being replaced.
+        _searchCts?.Cancel();
+
         for (var i = 0; i < engine.PageCount; i++)
         {
             var size = engine.GetPageSize(i);
@@ -1546,8 +1680,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(PageLabel));
         OnPropertyChanged(nameof(PageCount));
 
-        // Thumbnails are cheap at this size and let the sidebar fill in immediately.
-        _ = RenderThumbnailsAsync();
+        // Warm only the first screenful of thumbnails; the rest render as their rows are
+        // realised. Warming everything up front stalled the UI on large scanned documents.
+        foreach (var page in Pages.Take(6)) EnsureThumbnail(page);
     }
 
     private void SaveAs()
@@ -1712,31 +1847,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private async Task RenderThumbnailsAsync()
-    {
-        if (_renderer is null) return;
-        var renderer = _renderer;
-        var pages = Pages.ToList();
-
-        await Task.Run(() =>
-        {
-            foreach (var page in pages)
-            {
-                try
-                {
-                    const double target = 110.0;
-                    var scale = target / Math.Max(1, page.WidthInPoints);
-                    var bitmap = renderer.Get(page.SourceIndex, scale, page.Item.Rotation, true);
-                    Application.Current?.Dispatcher.Invoke(() => page.Thumbnail = bitmap);
-                }
-                catch
-                {
-                    // A thumbnail failing is not worth interrupting the user over.
-                }
-            }
-        });
-    }
-
     // ------------------------------------------------------------------ pages
 
     private PageViewModel? CurrentPage =>
@@ -1891,8 +2001,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// Adds an annotation from a drag on a page. <paramref name="path"/> is the pointer trail in
     /// page points — a single point for a click, many for ink. Text-markup tools snap the run
     /// between the first and last point onto the underlying text.
+    ///
+    /// <paramref name="contents"/> is the note's text, filled in by the view's input prompt
+    /// before the annotation is created so the whole placement stays one undo step.
     /// </summary>
-    public AnnotationSpec? AddAnnotation(PageViewModel page, EditorTool tool, IReadOnlyList<Point> path)
+    public AnnotationSpec? AddAnnotation(PageViewModel page, EditorTool tool,
+        IReadOnlyList<Point> path, string? contents = null)
     {
         // Select and EditContent are pointer modes, not annotation tools.
         if (_engine is null ||
@@ -1921,6 +2035,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             PageIndex = page.SourceIndex,
             Page = page.Item,
             Author = Environment.UserName,
+            Contents = contents,
         };
 
         ApplyToolColour(spec, kind);
@@ -2030,53 +2145,85 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // ------------------------------------------------------------------ search
 
+    private CancellationTokenSource? _searchCts;
+
+    /// <summary>
+    /// Searches every page and streams hits to the result list as they are found.
+    ///
+    /// The previous version collected everything in one background pass and only published at
+    /// the end, so a large document left the UI showing "搜索中…" with no results and no way
+    /// out. Results now appear page by page with a progress counter, and starting a new search
+    /// (or clearing) cancels the one in flight.
+    /// </summary>
     private async void RunSearch()
     {
         if (_engine is null || string.IsNullOrWhiteSpace(SearchText)) return;
 
         var term = SearchText;
         var engine = _engine;
+
+        _searchCts?.Cancel();
+        var cts = _searchCts = new CancellationTokenSource();
+
         IsBusy = true;
+        SearchResults.Clear();
         StatusText = $"正在搜索「{term}」…";
 
         try
         {
             var layers = _model.TextLayers.ToList();
+            var total = engine.PageCount;
+            var found = 0;
 
-            var results = await Task.Run(() =>
+            for (var i = 0; i < total; i++)
             {
-                var all = new List<SearchHit>();
-                for (var i = 0; i < engine.PageCount; i++)
+                if (cts.IsCancellationRequested) return;
+
+                var hits = await Task.Run(() =>
                 {
+                    var pageHits = new List<SearchHit>();
                     foreach (var hit in engine.FindOnPage(i, term))
-                    {
-                        all.Add(hit with { Preview = engine.GetTextRange(i, hit.StartIndex, hit.Length) });
-                    }
-                }
+                        pageHits.Add(hit with { Preview = engine.GetTextRange(i, hit.StartIndex, hit.Length) });
+                    return pageHits;
+                }, cts.Token);
 
-                // Recognised text is not in the PDF until export, so it is matched in memory.
-                // Without this, freshly OCR'd pages would not be searchable until saved.
+                found += hits.Count;
+                foreach (var hit in hits) SearchResults.Add(hit);
+
+                if (i % 8 == 0 || i == total - 1)
+                    StatusText = $"正在搜索「{term}」… 第 {i + 1} / {total} 页，已找到 {found} 处";
+            }
+
+            // Recognised text is not in the PDF until export, so it is matched in memory.
+            // Without this, freshly OCR'd pages would not be searchable until saved.
+            if (!cts.IsCancellationRequested)
+            {
                 foreach (var (page, words) in layers)
-                    all.AddRange(SearchOcrLayer(page.SourceIndex, words, term));
+                {
+                    var ocrHits = SearchOcrLayer(page.SourceIndex, words, term).ToList();
+                    found += ocrHits.Count;
+                    foreach (var hit in ocrHits) SearchResults.Add(hit);
+                }
+            }
 
-                return all;
-            });
-
-            SearchResults.Clear();
-            foreach (var hit in results) SearchResults.Add(hit);
+            if (cts.IsCancellationRequested) return;
 
             RefreshSearchHighlights();
 
-            if (results.Count == 0)
+            if (found == 0)
             {
                 StatusText = $"未找到「{term}」。";
             }
             else
             {
-                var ocrCount = results.Count(r => r.FromOcr);
-                StatusText = $"找到 {results.Count} 处匹配" +
+                var ocrCount = SearchResults.Count(r => r.FromOcr);
+                StatusText = $"找到 {found} 处匹配" +
                              (ocrCount > 0 ? $"（其中 {ocrCount} 处来自 OCR 识别结果）" : "") + "。";
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer search or cleared by the user; leave the status alone.
         }
         catch (Exception ex)
         {
@@ -2084,7 +2231,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            IsBusy = false;
+            // Only the search that still owns the token may clear the flag — a superseded one
+            // must not unmark the successor that is already running.
+            if (_searchCts == cts) IsBusy = false;
         }
     }
 
@@ -2212,6 +2361,53 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StatusText = "已添加页码（导出时绘制）。";
     }
 
+    /// <summary>
+    /// Prints the live pages through WPF's print pipeline. The pages as currently edited —
+    /// rotation, pending annotations, reordering — are what comes out, not the source file.
+    /// </summary>
+    private void Print()
+    {
+        if (_engine is null || _model.LivePages.Count == 0) return;
+
+        var dialog = new PrintDialog
+        {
+            UserPageRangeEnabled = true,
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var pages = _model.LivePages;
+
+            // Honour a narrowed range if one was given; otherwise everything.
+            // WPF's PageRange exposes PageFrom/PageTo (1-based), not From/To.
+            if (dialog.PageRangeSelection == PageRangeSelection.UserPages &&
+                dialog.PageRange.PageFrom >= 1 && dialog.PageRange.PageFrom <= pages.Count)
+            {
+                var from = dialog.PageRange.PageFrom - 1;
+                var to = Math.Min(dialog.PageRange.PageTo, pages.Count) - 1;
+                pages = pages.Skip(from).Take(to - from + 1).ToList();
+            }
+
+            var dpi = dialog.PrintTicket.PageResolution?.X ?? 300;
+            var paginator = new PdfPrintPaginator(_engine, pages,
+                dialog.PrintableAreaWidth, dialog.PrintableAreaHeight, dpi);
+
+            dialog.PrintDocument(paginator, string.IsNullOrEmpty(FilePath)
+                ? "文档"
+                : Path.GetFileNameWithoutExtension(FilePath));
+
+            StatusText = $"已发送 {pages.Count} 页到打印机。";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "打印失败。";
+            MessageBox.Show($"打印失败：\n{ex.Message}", "打印失败",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void ExportImages()
     {
         if (_engine is null || _renderer is null) return;
@@ -2272,6 +2468,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ClearAnnotationsCommand.RaiseCanExecuteChanged();
         RotateClockwiseCommand.RaiseCanExecuteChanged();
         RotateCounterClockwiseCommand.RaiseCanExecuteChanged();
+        ExportImagesCommand.RaiseCanExecuteChanged();
+        PrintCommand.RaiseCanExecuteChanged();
     }
 
     private static TextRect Normalize(Point a, Point b) => new(
@@ -2307,6 +2505,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        _searchCts?.Cancel();
         _renderer?.Dispose();
         _engine?.Dispose();
     }

@@ -318,9 +318,18 @@ internal static class PdfiumNative
     internal static extern int FPDFAnnot_SetColor(IntPtr annot, int colorType,
         uint r, uint g, uint b, uint a);
 
-    /// <summary><paramref name="value"/> must be a NUL-terminated UTF-16LE buffer.</summary>
+    /// <summary>
+    /// <paramref name="key"/> must be a NUL-terminated byte string (FPDF_BYTESTRING — ASCII),
+    /// <paramref name="value"/> a NUL-terminated UTF-16LE buffer (FPDF_WIDESTRING). Encoding the
+    /// key as UTF-16LE silently truncates it at the first NUL, so "Contents" would arrive as "C".
+    /// </summary>
     [DllImport(Lib, CallingConvention = CallingConvention.StdCall)]
     internal static extern int FPDFAnnot_SetStringValue(IntPtr annot, byte[] key, byte[] value);
+
+    /// <summary>Reads a string entry such as /Contents. Returns the required byte length of the
+    /// UTF-16LE value including the terminator; call with a null buffer first to size it.</summary>
+    [DllImport(Lib, CallingConvention = CallingConvention.StdCall)]
+    internal static extern uint FPDFAnnot_GetStringValue(IntPtr annot, byte[] key, byte[]? buffer, uint buflen);
 
     /// <summary>Appends one stroke to an ink annotation. Points are in PDF user space.</summary>
     [DllImport(Lib, CallingConvention = CallingConvention.StdCall)]

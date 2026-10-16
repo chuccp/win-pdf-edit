@@ -223,7 +223,7 @@ public sealed class PageViewModel : ObservableObject
         {
             var color = Color.FromRgb(spec.R, spec.G, spec.B);
             var fillAlpha = spec.Kind is AnnotationKind.Highlight or AnnotationKind.Rectangle
-                or AnnotationKind.Ellipse
+                or AnnotationKind.Ellipse or AnnotationKind.Note
                 ? spec.A
                 : (byte)0;
 

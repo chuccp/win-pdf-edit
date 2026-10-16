@@ -40,7 +40,10 @@
         </DataTemplate>
 
         <DataTemplate x:Key="NoteTpl">
-            <Grid Width="{Binding Bounds.Width}" Height="{Binding Bounds.Height}">
+            <!-- The icon stays small; the text it carries shows as a tooltip so a page
+                 full of notes does not turn into a wall of text. -->
+            <Grid Width="{Binding Bounds.Width}" Height="{Binding Bounds.Height}"
+                  ToolTip="{Binding Source.Contents}">
                 <Rectangle Fill="{Binding Fill}" Stroke="#B45309" StrokeThickness="1" RadiusX="3" RadiusY="3"/>
                 <TextBlock Text="&#xE70B;" FontFamily="Segoe MDL2 Assets" FontSize="11"
                            Foreground="#7C2D12" HorizontalAlignment="Center" VerticalAlignment="Center"/>
@@ -284,6 +287,14 @@
 
                 <Rectangle Style="{StaticResource Bar}"/>
 
+                <Button Style="{StaticResource ToolButton}" Command="{Binding PrintCommand}"
+                        ToolTip="打印 (Ctrl+P)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE749;" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center"/>
+                        <TextBlock Text="打印" Margin="5,0,0,0"/>
+                    </StackPanel>
+                </Button>
+
                 <Button Style="{StaticResource ToolButton}" Command="{Binding ExportImagesCommand}" Content="导出图片"/>
 
                 <!-- Annotation editing: appears when an annotation is picked in 选择 mode. -->
@@ -373,8 +384,13 @@
                                  Background="Transparent">
                             <ListBox.ItemTemplate>
                                 <DataTemplate DataType="vm:PageViewModel">
+                                    <!-- Loaded / DataContextChanged drive thumbnail lazy-loading:
+                                         the sidebar virtualises, so a row is only realised when
+                                         it scrolls into view. -->
                                     <StackPanel Margin="0,6" Cursor="Hand"
-                                                MouseLeftButtonUp="OnThumbnailClick">
+                                                MouseLeftButtonUp="OnThumbnailClick"
+                                                Loaded="OnThumbnailRowLoaded"
+                                                DataContextChanged="OnThumbnailRowDataContextChanged">
                                         <Border Background="White" BorderBrush="#D1D5DB" BorderThickness="1"
                                                 HorizontalAlignment="Center">
                                             <Grid>
@@ -437,6 +453,40 @@
                                                 <Run Text="第"/><Run Text="{Binding PageIndex}"/><Run Text="页"/>
                                             </TextBlock>
                                         </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </TabItem>
+
+                    <!-- Edit history as one list: applied edits above the cursor row, undone
+                         ones below. Clicking a row jumps the document to that state. -->
+                    <TabItem Header="历史">
+                        <DockPanel Margin="8">
+                            <TextBlock DockPanel.Dock="Top" Foreground="#9CA3AF" Margin="0,0,0,6"
+                                       Text="点击任意一步可跳转到该状态"/>
+                            <ListBox ItemsSource="{Binding History}" BorderThickness="0"
+                                     Background="Transparent"
+                                     MouseLeftButtonUp="OnHistoryRowClick">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Label}" TextWrapping="Wrap" Margin="2,3">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="#1F2937"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsCursor}" Value="True">
+                                                            <Setter Property="Foreground" Value="#2563EB"/>
+                                                            <Setter Property="FontWeight" Value="SemiBold"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Applied}" Value="False">
+                                                            <Setter Property="Foreground" Value="#9CA3AF"/>
+                                                            <Setter Property="FontStyle" Value="Italic"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
