@@ -37,6 +37,7 @@ Services/
   RenderService.cs         带 LRU 上限的位图缓存
   PdfExportService.cs      页面结构 + 叠加内容（PDFsharp）
   DocumentExporter.cs      两阶段导出的编排
+  OcrService.cs            Windows 语言识别引擎的扫描件文字提取
   WindowsFontResolver.cs   PDFsharp 6 的字体解析器
   FontMatcher.cs           按笔画指标为改写文字匹配最接近的系统字体
   PdfPrintPaginator.cs     把渲染页喂给 WPF 打印管线
@@ -89,7 +90,7 @@ Views/                     MainWindow、转换器
 
 ## 待办
 
-按影响排序。动手前请先读下面的「改动前必读」。
+短期清单已清空。新动手前先读下面的「改动前必读」。
 
 ### 已完成
 
@@ -97,7 +98,7 @@ Views/                     MainWindow、转换器
 - [x] **缩略图懒加载** —— 缩略图随侧栏行进入视口才渲染。
 - [x] **字体按原字形匹配** —— 用笔画覆盖率/游程/波动三项指标为改写文字匹配最接近的系统字体（`FontMatcher`）。
 - [x] **搜索异步化** —— 结果逐页流入结果面板，带「第 X / N 页」进度，新搜索或清除会取消旧搜索。
-- [x] **打印** —— `PdfPrintPaginator` 复用 `PdfiumEngine.RenderPage` 喂给 WPF `PrintDialog`，支持页码范围。
+- [x] **打印** —— `PdfPrintPaginator` 复用 `PdfiumEngine.RenderPage` 喂给 WPF `PrintDialog`，支持页码范围（Ctrl+P）。
 - [x] **撤销历史面板** —— 「历史」标签页列出每一步，点击跳转到该状态。
 
 ### 已知未解决
